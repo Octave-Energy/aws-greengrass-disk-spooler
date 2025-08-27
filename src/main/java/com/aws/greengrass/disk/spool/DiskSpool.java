@@ -24,6 +24,7 @@ public class DiskSpool extends PluginService implements CloudMessageSpool {
     public static final String PERSISTENCE_SERVICE_NAME = "aws.greengrass.DiskSpooler";
     private static final Logger logger = LogManager.getLogger(DiskSpool.class);
     private static final String KV_MESSAGE_ID = "messageId";
+    private final Long diskSpillThresholdBytes;
     private final DiskSpoolDAO dao;
 
     /**
@@ -34,9 +35,10 @@ public class DiskSpool extends PluginService implements CloudMessageSpool {
     @Inject
     public DiskSpool(Topics topics, DiskSpoolDAO dao) {
         super(topics);
-        logger.info("SVEND --- initializing disk spooler with topic " + topics);
-        long diskSpillThreshold = Coerce.toLong(topics.findOrDefault(0, new String[]{"diskSpillThreshold"}));
-        logger.info("SVEND -- diskSpillThreshold " + diskSpillThreshold);
+        diskSpillThresholdBytes = Coerce.toLong(
+                topics.findOrDefault(0, new String[]{"configuration", "diskSpillThresholdBytes"})
+        );
+        logger.info("diskSpillThresholdBytes: " + diskSpillThresholdBytes);
         this.dao = dao;
     }
 
