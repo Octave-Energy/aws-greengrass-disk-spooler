@@ -47,8 +47,8 @@ public class DiskSpool extends PluginService implements CloudMessageSpool {
 
     /**
      * constructor.
-     * @param topics : id assigned to MQTT message
-     * @param dao : id assigned to MQTT message
+     * @param topics : plugin configuration
+     * @param dao : actual db storage handler
      */
     @Inject
     public DiskSpool(Topics topics, DiskSpoolDAO dao) {
