@@ -12,6 +12,7 @@ import com.aws.greengrass.logging.api.Logger;
 import com.aws.greengrass.logging.impl.LogManager;
 import com.aws.greengrass.mqttclient.spool.CloudMessageSpool;
 import com.aws.greengrass.mqttclient.spool.SpoolMessage;
+import com.aws.greengrass.util.Coerce;
 
 import java.io.IOException;
 import java.sql.SQLException;
@@ -25,9 +26,17 @@ public class DiskSpool extends PluginService implements CloudMessageSpool {
     private static final String KV_MESSAGE_ID = "messageId";
     private final DiskSpoolDAO dao;
 
+    /**
+     * constructor.
+     * @param topics : id assigned to MQTT message
+     * @param dao : id assigned to MQTT message
+     */
     @Inject
     public DiskSpool(Topics topics, DiskSpoolDAO dao) {
         super(topics);
+        logger.info("SVEND --- initializing disk spooler with topic " + topics);
+        long diskSpillThreshold = Coerce.toLong(topics.findOrDefault(0, new String[]{"diskSpillThreshold"}));
+        logger.info("SVEND -- diskSpillThreshold " + diskSpillThreshold);
         this.dao = dao;
     }
 
