@@ -50,7 +50,7 @@ public class DiskSpoolTest {
     @Test
     void GIVEN_traffic_is_low_WHEN_storing_messages_in_diskspool_THEN_nothing_should_spill_to_disk() throws SQLException, IOException {
 
-        // This validate backward compatibility with previous behavior without spill threshold:
+        // This validates backward compatibility with previous behavior without spill threshold:
         // setting the threshold to 0 should mean all messages are persisted
 
         try (Context context = new Context()) {
@@ -100,8 +100,7 @@ public class DiskSpoolTest {
     @Test
     void GIVEN_spill_threshold_is_set_WHEN_storing_messages_in_diskspool_THEN_message_should_spill_over_to_dick() throws SQLException, IOException {
 
-        // This validate backward compatibility with previous behavior without spill threshold:
-        // setting the threshold to 0 should mean all messages are persisted
+        // This validates the new behavior with spill threshold
 
         try (Context context = new Context()) {
 
