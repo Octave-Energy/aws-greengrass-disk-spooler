@@ -7,7 +7,6 @@
 
 <img src="https://img.shields.io/badge/OS-linux%20%7C%20windows-blue??style=flat&logo=Linux&logoColor=b0c0c0&labelColor=363D44" alt="Operating systems"/>
 
-
 <br>
 
 The AWS IoT Greengrass Disk Spooler Component (aws.greengrass.DiskSpooler) offers persistent storage option when Greengrass device is offline. Messages destined to AWS IoT Core are queued in-memory on the device by default. Deploy this plugin component and configure the [Greengrass Nucleus component](https://github.com/aws-greengrass/aws-greengrass-nucleus) to persist messages across device power cycles. 
@@ -32,3 +31,18 @@ Deploy this component and customize the following configuration parameters of th
 - Interested in contributing to this project? Please see [Contributing](CONTRIBUTING.md).
 - Need to report a security issue? Please see [Security](CONTRIBUTING.md#security-issue-notifications).
 
+## Development
+
+```shell
+# code style validation
+JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-1.8.jdk/Contents/Home mvn validate
+
+# packaging
+JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-1.8.jdk/Contents/Home mvn package
+
+# Greengrass component build
+JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-1.8.jdk/Contents/Home gdk component build
+
+# Greengrass component publication to AWS
+JAVA_HOME=/Library/Java/JavaVirtualMachines/jdk-1.8.jdk/Contents/Home gdk component publish
+```
