@@ -2,7 +2,7 @@
   "component" :{
     "aws.greengrass.DiskSpooler": {
       "author": "AWS",
-      "version": "1.1.0-octave",
+      "version": "1.2.0-octave",
       "build": {
         "build_system": "maven"
       },
