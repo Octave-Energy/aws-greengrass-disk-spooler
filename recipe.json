@@ -7,7 +7,7 @@
   "ComponentPublisher": "{COMPONENT_PUBLISHER}",
   "ComponentDependencies": {
     "aws.greengrass.Nucleus": {
-      "VersionRequirement": ">=2.11.0 <2.16.0",
+      "VersionRequirement": ">=2.11.0 <3.0.0",
       "DependencyType": "SOFT"
     }
   },
