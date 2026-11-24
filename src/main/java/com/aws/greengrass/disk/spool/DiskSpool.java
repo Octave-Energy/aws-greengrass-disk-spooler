@@ -13,10 +13,15 @@ import com.aws.greengrass.logging.impl.LogManager;
 import com.aws.greengrass.mqttclient.spool.CloudMessageSpool;
 import com.aws.greengrass.mqttclient.spool.InMemorySpool;
 import com.aws.greengrass.mqttclient.spool.SpoolMessage;
+import com.aws.greengrass.mqttclient.spool.SpoolMessageMetadata;
 import com.aws.greengrass.util.Coerce;
 
 import java.io.IOException;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import javax.inject.Inject;
@@ -132,14 +137,39 @@ public class DiskSpool extends PluginService implements CloudMessageSpool {
         }
     }
 
+    /**
+     * Ids of all spooled messages, in memory and on disk, ordered by id ascending.
+     */
     @Override
     public Iterable<Long> getAllMessageIds() throws IOException {
         try {
             Iterable<Long> fromDao = dao.getAllSpoolMessageIds();
-            return () -> Stream.concat(
+            return Stream.concat(
                     inMemorySpooler.getAllMessageIds().stream(),
                     StreamSupport.stream(fromDao.spliterator(), false)
-            ).iterator();
+            ).sorted().collect(Collectors.toList());
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
+    }
+
+    /**
+     * Id, payload size and QoS of all spooled messages, in memory and on disk, ordered by id ascending.
+     * Called by Nucleus >= 2.19 at startup instead of reading every message with {@link #getMessageById(long)}.
+     */
+    @Override
+    public List<SpoolMessageMetadata> getAllMessageMetadata() throws IOException {
+        try {
+            List<SpoolMessageMetadata> metadata = new ArrayList<>(dao.getAllSpoolMessageMetadata());
+            for (Long id : inMemorySpooler.getAllMessageIds()) {
+                SpoolMessage message = inMemorySpooler.getMessageById(id);
+                if (message != null) {
+                    metadata.add(new SpoolMessageMetadata(id, message.getRequest().getPayload().length,
+                            message.getRequest().getQos()));
+                }
+            }
+            metadata.sort(Comparator.comparingLong(SpoolMessageMetadata::getId));
+            return metadata;
         } catch (SQLException e) {
             throw new IOException(e);
         }
