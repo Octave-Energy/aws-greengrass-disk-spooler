@@ -195,21 +195,26 @@ public class DiskSpoolDAO {
 
     /**
      * Insert a message into the database.
+     * Synchronized because all callers share one cached PreparedStatement: binding parameters and executing must
+     * not interleave between threads.
      *
      * @param message message
      * @throws SQLException if statement failed to execute
      */
-    public void insertSpoolMessage(SpoolMessage message) throws SQLException {
+    public synchronized void insertSpoolMessage(SpoolMessage message) throws SQLException {
         insertSpoolMessage.executeWithParameters(message);
     }
 
     /**
      * Remove a message by id from the database.
+     * Synchronized for the same reason as {@link #insertSpoolMessage}: Nucleus calls this from several MQTT ack
+     * callback threads at once, and an unsynchronized bind/execute could delete another thread's id and leave this
+     * one behind.
      *
      * @param id message id
      * @throws SQLException if statement failed to execute
      */
-    public void removeSpoolMessageById(Long id) throws SQLException {
+    public synchronized void removeSpoolMessageById(Long id) throws SQLException {
         removeSpoolMessageById.executeWithParameters(id);
     }
 

@@ -46,8 +46,14 @@ public class DiskSpool extends PluginService implements CloudMessageSpool {
     private static final String KV_MESSAGE_ID = "messageId";
     private final DiskSpoolDAO dao;
 
-    private final Long diskSpillThresholdBytes;
-    private Long inMemorySpoolSize = 0L;
+    private final long diskSpillThresholdBytes;
+    /**
+     * Guards {@link #inMemorySpooler} together with {@link #inMemorySpoolSize}. Nucleus calls {@link #add} under its
+     * own lock, but calls {@link #removeMessageById} from MQTT ack callback threads, several at once and sometimes
+     * twice for the same id, so the map and the byte count must change together.
+     */
+    private final Object inMemoryLock = new Object();
+    private long inMemorySpoolSize;
     private final InMemorySpool inMemorySpooler = new InMemorySpool();
 
     /**
@@ -97,13 +103,17 @@ public class DiskSpool extends PluginService implements CloudMessageSpool {
      */
     @Override
     public void removeMessageById(long id) {
-        try {
+        synchronized (inMemoryLock) {
             SpoolMessage message = inMemorySpooler.getMessageById(id);
             if (message != null) {
                 inMemorySpooler.removeMessageById(id);
-                inMemorySpoolSize = Math.max(0, inMemorySpoolSize - message.getRequest().getPayload().length);
+                inMemorySpoolSize -= message.getRequest().getPayload().length;
+                logger.atTrace().kv(KV_MESSAGE_ID, id).log("Removed message from memory");
+                // ids are unique: a message kept in memory was never written to disk
+                return;
             }
-
+        }
+        try {
             dao.removeSpoolMessageById(id);
             logger.atTrace().kv(KV_MESSAGE_ID, id).log("Removed message from Disk Spooler");
         } catch (SQLException e) {
@@ -121,19 +131,30 @@ public class DiskSpool extends PluginService implements CloudMessageSpool {
      */
     @Override
     public void add(long id, SpoolMessage message) throws IOException {
-        if (inMemorySpoolSize < diskSpillThresholdBytes) {
-            // this is meant to happen most of the time: while number of in-flight message is low, they're only
-            // kept in memory
-            inMemorySpooler.add(id, message);
-            inMemorySpoolSize += message.getRequest().getPayload().length;
-        } else {
-            // when memory is full: spill over to disk
-            try {
-                dao.insertSpoolMessage(message);
-                logger.atTrace().kv(KV_MESSAGE_ID, id).log("Added message to Disk Spooler");
-            } catch (SQLException e) {
-                throw new IOException(e);
+        synchronized (inMemoryLock) {
+            if (inMemorySpoolSize < diskSpillThresholdBytes) {
+                // this is meant to happen most of the time: while number of in-flight message is low, they're only
+                // kept in memory
+                inMemorySpooler.add(id, message);
+                inMemorySpoolSize += message.getRequest().getPayload().length;
+                return;
             }
+        }
+        // when memory is full: spill over to disk
+        try {
+            dao.insertSpoolMessage(message);
+            logger.atTrace().kv(KV_MESSAGE_ID, id).log("Added message to Disk Spooler");
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
+    }
+
+    /**
+     * Payload bytes currently held in memory.
+     */
+    long getInMemorySpoolSize() {
+        synchronized (inMemoryLock) {
+            return inMemorySpoolSize;
         }
     }
 
