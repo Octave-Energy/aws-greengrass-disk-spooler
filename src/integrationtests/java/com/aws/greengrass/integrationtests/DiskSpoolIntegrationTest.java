@@ -193,6 +193,25 @@ class DiskSpoolIntegrationTest {
     }
 
     @Test
+    void GIVEN_corrupted_database_file_WHEN_nucleus_restarts_THEN_new_database_used_AND_messages_are_persisted()
+            throws SpoolerStoreException, InterruptedException, IOException {
+        spooler.addMessage(publishRequestFromPayload("Lost"));
+
+        // corrupt the database while nucleus is stopped
+        kernel.shutdown();
+        Files.write(spoolerDatabaseFile, Utils.generateRandomString(4096).getBytes(StandardCharsets.UTF_8));
+
+        // nucleus starts with a new, empty database instead of falling back to the in-memory spooler
+        startNucleus();
+        assertEquals(0, spooler.getCurrentMessageCount());
+        long id = spooler.addMessage(publishRequestFromPayload("Kept")).getId();
+
+        kernel.shutdown();
+        startNucleus();
+        assertPayloadByMessageIdEquals(id, "Kept");
+    }
+
+    @Test
     void GIVEN_disk_spool_plugin_WHEN_kernel_starts_THEN_database_file_instantiated() {
         assertTrue(Files.exists(spoolerDatabaseFile));
     }

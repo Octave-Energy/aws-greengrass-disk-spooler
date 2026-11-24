@@ -20,9 +20,12 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.sql.SQLTransientException;
@@ -265,6 +268,59 @@ class DiskSpoolDAOTest {
         dao.getConnection().addExceptionOnUpdate(transientException);
         dao.getConnection().addExceptionOnUpdate(transientException);
         assertThrows(SQLException.class, () -> operation.apply(dao));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"garbage", "truncated", "damaged-header"})
+    void GIVEN_corrupted_database_file_WHEN_initialize_THEN_new_database_created(String corruption)
+            throws SQLException, IOException {
+        Path database = currDir.resolve("corrupted.db");
+        DiskSpoolDAO previousRun = new DiskSpoolDAO(database);
+        previousRun.initialize();
+        try {
+            for (long id = 0; id < 200L; id++) {
+                previousRun.insertSpoolMessage(SpoolMessage.builder().id(id)
+                        .request(Publish.builder().topic("t").payload(new byte[500]).qos(QOS.AT_LEAST_ONCE).build())
+                        .build());
+            }
+        } finally {
+            previousRun.close();
+        }
+        corrupt(database, corruption);
+
+        DiskSpoolDAO restarted = new DiskSpoolDAO(database);
+        try {
+            // corruption is found while statements are prepared, before any statement executes
+            restarted.initialize();
+
+            assertTrue(restarted.getAllSpoolMessageMetadata().isEmpty());
+            restarted.insertSpoolMessage(SpoolMessage.builder().id(1L)
+                    .request(Publish.builder().topic("t").payload(new byte[5]).qos(QOS.AT_LEAST_ONCE).build())
+                    .build());
+            assertNotNull(restarted.getSpoolMessageById(1L));
+        } finally {
+            restarted.close();
+        }
+    }
+
+    private static void corrupt(Path database, String corruption) throws IOException {
+        byte[] content = Files.readAllBytes(database);
+        switch (corruption) {
+            case "garbage":
+                byte[] garbage = new byte[4096];
+                Arrays.fill(garbage, (byte) 'x');
+                Files.write(database, garbage);
+                break;
+            case "truncated":
+                Files.write(database, Arrays.copyOf(content, content.length / 2));
+                break;
+            case "damaged-header":
+                content[0] = 'X';
+                Files.write(database, content);
+                break;
+            default:
+                throw new IllegalArgumentException(corruption);
+        }
     }
 
     public static Stream<Arguments> allSpoolerOperations() {

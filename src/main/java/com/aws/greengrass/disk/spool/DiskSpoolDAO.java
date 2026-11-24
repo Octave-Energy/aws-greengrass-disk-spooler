@@ -49,6 +49,7 @@ public class DiskSpoolDAO {
     private static final ObjectMapper MAPPER = SerializerFactory.getFailSafeJsonObjectMapper();
     private static final String DATABASE_CONNECTION_URL = "jdbc:sqlite:%s";
     private static final String DATABASE_FILE_NAME = "spooler.db";
+    private static final String ROLLBACK_JOURNAL_SUFFIX = "-journal";
     private static final String KV_URL = "url";
     private static final Set<Integer> CORRUPTION_ERROR_CODES = new HashSet<>();
 
@@ -96,28 +97,68 @@ public class DiskSpoolDAO {
     }
 
     /**
-     * Initialize the database connection.
+     * Initialize the database connection. If the existing database file is corrupted, it is replaced by a new,
+     * empty database.
      *
      * @throws SQLException if database is unable to be created
      */
     public void initialize() throws SQLException {
         registerDriver();
         try (LockScope ls = LockScope.lock(connectionLock.writeLock())) {
-            close();
-            connection = createConnection();
-
-            // recreate the database table first
-            createSpoolerTable.replaceStatement(connection);
-            createSpoolerTable.execute();
-
-            // eagerly create remaining statements
-            for (CachedStatement<?, ?> statement : allStatements) {
-                if (Objects.equals(statement, createSpoolerTable)) {
-                    continue;
+            try {
+                connect();
+            } catch (SQLException e) {
+                if (!isCorruption(e)) {
+                    throw e;
                 }
-                statement.replaceStatement(connection);
+                // A damaged file is usually detected here, while statements are prepared, before any statement
+                // executes. Without this, every startup would fail on the same file.
+                recreateDatabase();
             }
         }
+    }
+
+    /**
+     * Open a connection, create the table if needed and prepare all statements.
+     * Must be called with the connection write lock held.
+     */
+    private void connect() throws SQLException {
+        close();
+        connection = createConnection();
+
+        // recreate the database table first
+        createSpoolerTable.replaceStatement(connection);
+        // corruption is handled by the callers of this method
+        createSpoolerTable.executeWithoutRecovery();
+
+        // eagerly create remaining statements
+        for (CachedStatement<?, ?> statement : allStatements) {
+            if (Objects.equals(statement, createSpoolerTable)) {
+                continue;
+            }
+            statement.replaceStatement(connection);
+        }
+    }
+
+    /**
+     * Delete the database file and start over with an empty database. All spooled messages on disk are lost.
+     * Must be called with the connection write lock held.
+     */
+    private void recreateDatabase() throws SQLException {
+        LOGGER.atWarn().kv(KV_URL, url).log("Database {} is corrupted, creating new database", databasePath);
+        close();
+        try {
+            Files.deleteIfExists(databasePath);
+            // a rollback journal left behind by the old file must not be replayed into the new one
+            Files.deleteIfExists(databasePath.resolveSibling(databasePath.getFileName() + ROLLBACK_JOURNAL_SUFFIX));
+        } catch (IOException e) {
+            throw new SQLException(e);
+        }
+        connect();
+    }
+
+    private static boolean isCorruption(SQLException e) {
+        return CORRUPTION_ERROR_CODES.contains(e.getErrorCode());
     }
 
     private void registerDriver() throws SQLException {
@@ -237,14 +278,7 @@ public class DiskSpoolDAO {
 
         // hold connection lock throughout recovery to prevent incoming operations from executing
         try (LockScope ls = LockScope.lock(connectionLock.writeLock())) {
-            LOGGER.atWarn().kv(KV_URL, url).log("Database {} is corrupted, creating new database", databasePath);
-            close();
-            try {
-                Files.deleteIfExists(databasePath);
-            } catch (IOException e2) {
-                throw new SQLException(e2);
-            }
-            initialize();
+            recreateDatabase();
         } finally {
             recoverDBLock.unlock();
         }
@@ -529,6 +563,16 @@ public class DiskSpoolDAO {
         }
 
         /**
+         * Execute the statement without triggering corruption recovery, for use while (re)creating the database.
+         *
+         * @return execution results
+         * @throws SQLException if error occurs during execution
+         */
+        R executeWithoutRecovery() throws SQLException {
+            return doExecute(statement);
+        }
+
+        /**
          * Set parameters on the statement and execute it.
          *
          * @param decorator function that sets statement parameters
@@ -545,7 +589,7 @@ public class DiskSpoolDAO {
             try {
                 return doExecute(statement);
             } catch (SQLException e) {
-                if (CORRUPTION_ERROR_CODES.contains(e.getErrorCode())) {
+                if (isCorruption(e)) {
                     recoverFromCorruption();
                 }
                 throw e;
