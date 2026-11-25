@@ -246,17 +246,60 @@ def _key_table(results: List[Dict[str, Any]], labels: List[str]) -> List[str]:
     return lines
 
 
-def _scenario_types(results: List[Dict[str, Any]]) -> str:
+def _scenario_types(results: List[Dict[str, Any]]) -> List[str]:
     """Explains the kinds of scenario in this report, and only those (the quick profile has no reset, for example)."""
     params = [r["scenario_params"] for r in results]
-    types = ["`…-outage` the link to AWS IoT Core is down while the device keeps running and the spooler takes over"]
+    rows = [("`r<rate>-spill<threshold>-outage`", "**internet outage**: the link to AWS IoT Core is down, the device "
+             "keeps running and the spooler takes over")]
     if any(p.get("device_crash") or p.get("power_loss") for p in params):
-        types.append("`…-outage-devicecrash` the whole device also crashes during the outage and boots again while "
-                     "still offline")
+        rows.append(("`…-outage-devicecrash`", "internet outage, and the whole device crashes during it and boots "
+                     "again while still offline"))
     if any(p.get("outage_mode") == "reset" for p in params):
-        types.append("`…-outage-reset` the connections are reset instead of black-holed")
-    return ("Every scenario has an **internet outage**: " + "; ".join(types) + ". `r<rate>` is the publish rate in "
-            "msg/s, `spill<threshold>` the diskSpillThresholdBytes (spill0: disk only, no RAM).")
+        rows.append(("`…-outage-reset`", "internet outage where the connections are reset instead of black-holed"))
+    return (["Every scenario cuts the internet while IBEMS keeps publishing:", "",
+             "| scenario | what happens |", "|---|---|"]
+            + [f"| {name} | {text} |" for name, text in rows]
+            + ["", "`r<rate>`: IBEMS publish rate in msg/s. `spill<threshold>`: diskSpillThresholdBytes, the backlog "
+                   "kept in RAM before the spooler writes to disk (`spill0`: disk only; `spill300k`: production)."])
+
+
+KEY_COLUMN_GROUPS = [
+    ("Online (link up)", [
+        ("accepted msg/s", "publishes the Nucleus accepted per second"),
+        ("delivered msg/s", "messages received in the cloud per second"),
+        ("e2e p50", "from creation of the batch to reception in the cloud"),
+        ("IPC p99", "time IBEMS waits for a publish to be accepted"),
+    ]),
+    ("Outage (link down)", [
+        ("spooled payload", "payload bytes accepted during the outage"),
+        ("db growth", "growth of spooler.db (+ journal) during the outage"),
+        ("disk B / payload B", "db growth per spooled payload byte"),
+        ("db after drain", "size of spooler.db at the end; SQLite does not give space back"),
+        ("heap for backlog", "live heap (after a full GC) at the end of the outage minus online"),
+        ("RSS peak", "peak resident memory of the Nucleus"),
+    ]),
+    ("Recovery (link back up)", [
+        ("backlog at link up", "messages waiting in the spooler when the internet came back"),
+        ("drain", "time to deliver that backlog while IBEMS keeps publishing"),
+        ("drain msg/s", "backlog / drain time. Messages are delivered in order, so this is close to the delivery "
+                        "capacity. After an outage shorter than the MQTT keep-alive the Nucleus has not noticed it "
+                        "and part of the backlog arrives at once from the stalled connection, so small backlogs drain "
+                        "faster"),
+        ("capacity msg/s", "delivery rate while working through a backlog with no new messages"),
+    ]),
+    ("Integrity", [
+        ("lost", "accepted by the Nucleus but never delivered"),
+        ("dup", "delivered more than once"),
+        ("rejected", "publishes the Nucleus refused"),
+    ]),
+]
+
+
+def _column_definitions() -> List[str]:
+    lines = ["<details><summary>What the columns mean</summary>", ""]
+    for group, columns in KEY_COLUMN_GROUPS:
+        lines += [f"**{group}**", ""] + [f"- *{name}*: {text}" for name, text in columns] + [""]
+    return lines + ["</details>"]
 
 
 def _duration(seconds: float) -> str:
@@ -356,19 +399,9 @@ def build(out: Path) -> Path:
               f"{fmt(payloads.get('max_bytes'), 'bytes')}.", ""]
 
     lines += ["## Key results", "",
-              _scenario_types(results), "",
-              "Online: steady state with the link up. Outage: the internet is down and the spooler takes over. "
-              "*e2e*: from creation of the batch to reception in the cloud. *db growth*: spooler.db (+journal) growth "
-              "during the outage; *disk B / payload B*: that growth per spooled payload byte. *heap for backlog*: live "
-              "heap (after a full GC) at the end of the outage minus online. *backlog at link up*: messages waiting "
-              "in the spooler when the internet came back. *drain*: time to deliver that backlog while IBEMS keeps "
-              "publishing; *drain msg/s*: backlog / drain time; messages are delivered in order, so new ones queue behind the "
-              "backlog and this is close to the delivery capacity. After an outage shorter than the MQTT keep-alive "
-              "the Nucleus has not noticed it and part of the backlog arrives at once from the stalled connection, so "
-              "small backlogs drain faster than the capacity. *capacity*: delivery rate when working through a backlog with no "
-              "new messages. *lost*: accepted by the Nucleus but never delivered.", ""]
+              *_scenario_types(results), ""]
     lines += _key_table(results, labels)
-    lines.append("")
+    lines += [""] + _column_definitions() + [""]
     lines += _projection_section(projections, profile) + [""]
 
     if len(labels) >= 2:
