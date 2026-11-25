@@ -4,6 +4,9 @@ The "cloud" MQTT broker: Eclipse Mosquitto, run from a pinned Docker image (or a
 Two listeners:
 - a mutual-TLS listener the Nucleus connects to (through the network proxy), like AWS IoT Core, and
 - a plain listener on localhost for the cloud-side subscriber, which never goes through the proxy.
+
+Both allow anonymous clients, so they must only be reachable from this machine: a local `mosquitto` binds them to
+127.0.0.1; in Docker they listen inside the container and are published on 127.0.0.1 only.
 """
 
 import random
@@ -54,7 +57,9 @@ class Broker:
         self.container: Optional[str] = None
         self.process: Optional[subprocess.Popen] = None
 
-    def _config(self, cert_dir: str, tls_port: int, plain_port: int) -> str:
+    @staticmethod
+    def _config(cert_dir: str, tls_port: int, plain_port: int, bind_address: Optional[str]) -> str:
+        bind = f" {bind_address}" if bind_address else ""
         return "\n".join([
             "persistence false",
             "log_dest stdout",
@@ -65,14 +70,14 @@ class Broker:
             "max_queued_bytes 0",
             "max_inflight_messages 0",
             "per_listener_settings true",
-            f"listener {tls_port}",
+            f"listener {tls_port}{bind}",
             f"cafile {cert_dir}/ca.pem",
             f"certfile {cert_dir}/server.pem",
             f"keyfile {cert_dir}/server.key",
             "require_certificate true",
             "use_identity_as_username true",
             "allow_anonymous true",
-            f"listener {plain_port}",
+            f"listener {plain_port}{bind}",
             "allow_anonymous true",
             "",
         ])
@@ -83,11 +88,13 @@ class Broker:
         if self.binary or (shutil.which("docker") is None and shutil.which("mosquitto")):
             binary = self.binary or shutil.which("mosquitto")
             conf = self.workdir / "mosquitto.conf"
-            conf.write_text(self._config(str(self.certs.ca_cert.parent), self.tls_port, self.plain_port))
+            # no port mapping in front of a local broker: listen on localhost only
+            conf.write_text(self._config(str(self.certs.ca_cert.parent), self.tls_port, self.plain_port, "127.0.0.1"))
             self.process = subprocess.Popen([binary, "-c", str(conf)], stdout=log, stderr=subprocess.STDOUT)
         else:
             conf = self.workdir / "mosquitto.conf"
-            conf.write_text(self._config("/certs", 8883, 1883))
+            # all interfaces of the container, which Docker publishes on the host's 127.0.0.1 only (-p below)
+            conf.write_text(self._config("/certs", 8883, 1883, None))
             self.container = f"spoolbench-broker-{uuid.uuid4().hex[:8]}"
             cmd = ["docker", "run", "-d", "--rm", "--name", self.container,
                    "-p", f"127.0.0.1:{self.tls_port}:8883", "-p", f"127.0.0.1:{self.plain_port}:1883",
