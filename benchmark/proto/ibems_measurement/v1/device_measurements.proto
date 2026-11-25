@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+import "ibems_measurement/v1/device_type.proto";
+import "ibems_measurement/v1/measurements_named_series.proto";
+
+package ibems_measurement.v1;
+
+// All measurements emitted by one single device
+message DeviceMeasurements { 
+  ibems_measurement.v1.DeviceType device_type = 1;
+
+  // Many device exist only once and therefore have no index (e.g. the "ems controller" device), in which case this field defaults to 0
+  // Device index is used when monitoring multiple devices, e.g several pv_clients or several BESS within the same site
+  // A plain uint32 is fine here: if unspecified, it defaults to 0
+  optional uint32 device_index = 2;
+
+  // Some setups feature a single inverter with multiple BMS, in which case the BMS index is used to distinguish between the different BMS within the same BESS.
+  // If the device is not a BMS, this field is ignored and defaults to 0.
+  optional uint32 bms_index = 4;
+
+
+  repeated ibems_measurement.v1.MeasurementsNamedSeries series = 3;
+}

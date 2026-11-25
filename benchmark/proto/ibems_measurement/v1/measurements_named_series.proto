@@ -1,0 +1,40 @@
+syntax = "proto3";
+package ibems_measurement.v1;
+
+import "ibems_measurement/v1/timed_value.proto";
+
+// All values for one given measurement name, e.g "power_kw", sent by one device
+message MeasurementsNamedSeries {
+  // measurement name, e.g. "power_kw"
+  string name = 1;
+
+  // most of the time this is the only time series present: device level measurement values, each with their timestamp
+  repeated ibems_measurement.v1.TimedValue values = 2;
+
+  // string level measurements, specific to BMS layer
+  repeated BmsStringMeasurements string_measurements = 3;
+}
+
+// -----
+// BMS specific measurement series messages
+// -----
+
+// all measurements value  emitted by a single BMS string, for one given measurement name and string id
+message BmsStringMeasurements {
+  optional uint32 string_id = 1;
+  repeated ibems_measurement.v1.TimedValue values = 2;
+  repeated BmsModuleMeasurements module_measurements = 3;
+}
+
+// all measurements emitted by a single BMS module, for one given measurement name, string id, and module id
+message BmsModuleMeasurements {
+  optional uint32 module_id = 1;
+  repeated ibems_measurement.v1.TimedValue values = 2;
+  repeated BmsCellMeasurements cell_measurements = 3;
+}
+
+// all measurements emitted by a single BMS cell, for one given measurement name, string id, module id, and cell id
+message BmsCellMeasurements {
+  optional uint32 cell_id = 1;
+  repeated ibems_measurement.v1.TimedValue values = 2;
+}

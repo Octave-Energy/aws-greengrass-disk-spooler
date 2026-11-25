@@ -1,0 +1,38 @@
+# Full profile: run on demand (workflow_dispatch) to establish or check a baseline. About 6-12 minutes per scenario
+# and per plugin build. The outage is longer than the MQTT keep-alive and ping timeouts, so the Nucleus notices the
+# outage, drops the connection and reconnects afterwards.
+
+nucleus_version: 2.18.3
+nucleus_configuration:
+  mqtt:
+    spooler:
+      storageType: Disk
+      maxSizeInBytes: 62914560
+  logging:
+    level: INFO
+    format: JSON
+plugin_configuration: {}
+jvm_options: []
+
+seed: 42
+max_outstanding: 1
+payload_profile: {small: 0.85, medium: 0.13, large: 0.02}
+
+defaults:
+  warmup_s: 10
+  online_s: 60
+  outage_s: 180
+  offline_after_reboot_s: 30
+  max_drain_s: 600
+  stall_s: 90
+  cooldown_s: 30
+
+matrix:
+  rate: [10, 50, 100]
+  spill_threshold_bytes: [0, 307200]
+
+scenarios:
+  - {rate: 100, spill_threshold_bytes: 0, device_crash: true}
+  - {rate: 100, spill_threshold_bytes: 307200, device_crash: true}
+  - {rate: 50, spill_threshold_bytes: 0, device_crash: true}
+  - {rate: 100, spill_threshold_bytes: 0, outage_mode: reset}

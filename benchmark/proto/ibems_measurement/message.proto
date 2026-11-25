@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package ibems_measurement;
+
+import "ibems_measurement/v1/measurement_batch.proto";
+
+// This is the top level message sent by IBEMS to emit measurements.
+// Simple wrapping envelope for the measurement batch, allowing for future (more efficent?) versions of the data model
+message MeasurementMessage {
+    oneof batch {
+        ibems_measurement.v1.MeasurementBatch batch_v1 = 1;
+    }
+}

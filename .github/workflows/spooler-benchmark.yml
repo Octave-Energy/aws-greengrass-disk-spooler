@@ -1,0 +1,214 @@
+name: Spooler benchmark
+
+# Black-box benchmark of the disk spooler plugin in a real Greengrass Nucleus (see benchmark/README.md).
+#
+# - pull_request: quick profile, the PR head against its base branch.
+# - workflow_dispatch: any two refs (branches, tags, commits), quick or full profile. Leave the candidate empty to
+#   benchmark one ref only, e.g. to record a baseline.
+#
+# Each scenario runs in its own job; inside a job both builds run one after the other on the same runner, so that
+# their comparison is not affected by differences between runners.
+
+on:
+  pull_request:
+    paths:
+      - 'src/main/**'
+      - 'pom.xml'
+      - 'benchmark/**'
+      - '.github/workflows/spooler-benchmark.yml'
+  workflow_dispatch:
+    inputs:
+      baseline_ref:
+        description: Baseline ref (branch, tag or commit)
+        default: main-octave
+        required: true
+      candidate_ref:
+        description: Candidate ref (empty to benchmark the baseline only)
+        default: ''
+        required: false
+      profile:
+        description: Benchmark profile (benchmark/scenarios/<profile>.yaml)
+        type: choice
+        options: [quick, full]
+        default: full
+      scenarios:
+        description: Regular expression on scenario names (empty for all)
+        default: ''
+        required: false
+      repeat:
+        description: Repetitions of every scenario
+        default: '1'
+        required: false
+
+permissions:
+  contents: read
+
+# No concurrency group: a follow-up commit must not cancel the benchmark of the previous one, nor wait for it. With a
+# group, GitHub keeps at most one pending run and cancels the others even without cancel-in-progress. Runs do not
+# disturb each other: every scenario job has a runner of its own.
+
+env:
+  PYTHON_VERSION: '3.13'  # as IBEMS
+  NUCLEUS_JAVA_VERSION: '17'
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      builds: ${{ steps.plan.outputs.builds }}
+      scenarios: ${{ steps.plan.outputs.scenarios }}
+      profile: ${{ steps.plan.outputs.profile }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install PyYAML==6.0.4
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          IN_BASELINE: ${{ inputs.baseline_ref }}
+          IN_CANDIDATE: ${{ inputs.candidate_ref }}
+          IN_PROFILE: ${{ inputs.profile }}
+          IN_SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            profile=quick
+            builds=$(jq -nc --arg b "$BASE_SHA" --arg bn "$BASE_REF" --arg c "$HEAD_SHA" --arg cn "$HEAD_REF" \
+              '[{label:"baseline",ref:$b,name:$bn},{label:"candidate",ref:$c,name:$cn}]')
+          else
+            profile="$IN_PROFILE"
+            builds=$(jq -nc --arg b "$IN_BASELINE" --arg c "$IN_CANDIDATE" \
+              '[{label:"baseline",ref:$b,name:$b}] + (if $c == "" then [] else [{label:"candidate",ref:$c,name:$c}] end)')
+          fi
+          cd benchmark
+          scenarios=$(python -m spoolbench list --profile "scenarios/$profile.yaml" ${IN_SCENARIOS:+--only "$IN_SCENARIOS"})
+          echo "builds=$builds" >> "$GITHUB_OUTPUT"
+          echo "scenarios=$scenarios" >> "$GITHUB_OUTPUT"
+          echo "profile=$profile" >> "$GITHUB_OUTPUT"
+          echo "builds: $builds"; echo "scenarios: $scenarios"
+
+  build:
+    needs: plan
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        build: ${{ fromJSON(needs.plan.outputs.builds) }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.build.ref }}
+      - uses: actions/setup-java@v6
+        with:
+          distribution: corretto
+          java-version: 8
+          cache: maven
+      - name: Build the plugin
+        run: mvn -B -ntp package -DskipTests -Dmaven.test.skip=true -Dlicense.skip=true -Dspotbugs.skip=true
+      - id: describe
+        run: echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+      # the build name is a branch name or a dispatch input: never interpolate it into the script
+      - env:
+          BUILD_NAME: ${{ matrix.build.name }}
+          BUILD_COMMIT: ${{ steps.describe.outputs.commit }}
+        run: printf '%s@%s\n' "$BUILD_NAME" "$BUILD_COMMIT" > target/REF
+      - uses: actions/upload-artifact@v7
+        with:
+          name: plugin-${{ matrix.build.label }}
+          path: |
+            target/aws.greengrass.DiskSpooler.jar
+            target/REF
+          retention-days: 7
+
+  run:
+    needs: [plan, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: benchmark/requirements.txt
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: ${{ env.NUCLEUS_JAVA_VERSION }}
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/spoolbench
+          key: spoolbench-nucleus-${{ hashFiles('benchmark/scenarios/*.yaml') }}
+          restore-keys: spoolbench-nucleus-
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: plugin-*
+          path: plugins
+      - name: Install
+        working-directory: benchmark
+        run: |
+          pip install -r requirements.txt
+          python -m spoolbench gen-proto
+          docker pull -q eclipse-mosquitto:2.0.20
+      - name: Run ${{ matrix.scenario }}
+        working-directory: benchmark
+        env:
+          REPEAT: ${{ inputs.repeat || '1' }}
+          PROFILE: ${{ needs.plan.outputs.profile }}
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          args=()
+          for dir in ../plugins/plugin-*; do
+            label=${dir##*/plugin-}
+            args+=(--jar "$label=$dir/aws.greengrass.DiskSpooler.jar" --ref "$label=$(cat "$dir/REF")")
+          done
+          # --fail-on-error: a scenario that could not run (e.g. the plugin did not load) fails the job
+          python -m spoolbench run --profile "scenarios/$PROFILE.yaml" "${args[@]}" \
+            --only "^$SCENARIO\$" --repeat "$REPEAT" --out results --fail-on-error
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: results-${{ matrix.scenario }}
+          path: benchmark/results
+          retention-days: 30
+
+  report:
+    needs: [plan, run]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: benchmark/requirements.txt
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: results-*
+          path: benchmark/results
+          merge-multiple: true
+      - name: Build the report
+        working-directory: benchmark
+        run: |
+          pip install PyYAML==6.0.4 matplotlib==3.11.2
+          python -m spoolbench report results
+          # the job summary shows Mermaid charts instead of the PNGs (which are in the artifact)
+          cat results/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: spooler-benchmark-report
+          path: |
+            benchmark/results/report.json
+            benchmark/results/report.md
+            benchmark/results/summary.md
+            benchmark/results/charts
+          retention-days: 90
