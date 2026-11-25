@@ -59,8 +59,8 @@ jobs:
       scenarios: ${{ steps.plan.outputs.scenarios }}
       profile: ${{ steps.plan.outputs.profile }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - run: pip install PyYAML==6.0.4
@@ -99,10 +99,10 @@ jobs:
       matrix:
         build: ${{ fromJSON(needs.plan.outputs.builds) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ matrix.build.ref }}
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: corretto
           java-version: 8
@@ -112,7 +112,7 @@ jobs:
       - id: describe
         run: echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
       - run: echo "${{ matrix.build.name }}@${{ steps.describe.outputs.commit }}" > target/REF
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: plugin-${{ matrix.build.label }}
           path: |
@@ -129,22 +129,22 @@ jobs:
       matrix:
         scenario: ${{ fromJSON(needs.plan.outputs.scenarios) }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: benchmark/requirements.txt
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: ${{ env.NUCLEUS_JAVA_VERSION }}
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/spoolbench
           key: spoolbench-nucleus-${{ hashFiles('benchmark/scenarios/*.yaml') }}
           restore-keys: spoolbench-nucleus-
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: plugin-*
           path: plugins
@@ -166,7 +166,7 @@ jobs:
           done
           python -m spoolbench run --profile "scenarios/${{ needs.plan.outputs.profile }}.yaml" "${args[@]}" \
             --only "^${{ matrix.scenario }}$" --repeat "$REPEAT" --out results
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: results-${{ matrix.scenario }}
@@ -178,13 +178,13 @@ jobs:
     if: always() && needs.plan.result == 'success'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
           cache-dependency-path: benchmark/requirements.txt
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: results-*
           path: benchmark/results
@@ -196,7 +196,7 @@ jobs:
           python -m spoolbench report results
           # the job summary cannot show the charts (they are in the artifact)
           grep -v '^!\[' results/report.md >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: spooler-benchmark-report
           path: |
