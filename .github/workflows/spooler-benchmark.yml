@@ -111,7 +111,11 @@ jobs:
         run: mvn -B -ntp package -DskipTests -Dmaven.test.skip=true -Dlicense.skip=true -Dspotbugs.skip=true
       - id: describe
         run: echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-      - run: echo "${{ matrix.build.name }}@${{ steps.describe.outputs.commit }}" > target/REF
+      # the build name is a branch name or a dispatch input: never interpolate it into the script
+      - env:
+          BUILD_NAME: ${{ matrix.build.name }}
+          BUILD_COMMIT: ${{ steps.describe.outputs.commit }}
+        run: printf '%s@%s\n' "$BUILD_NAME" "$BUILD_COMMIT" > target/REF
       - uses: actions/upload-artifact@v7
         with:
           name: plugin-${{ matrix.build.label }}
@@ -158,14 +162,17 @@ jobs:
         working-directory: benchmark
         env:
           REPEAT: ${{ inputs.repeat || '1' }}
+          PROFILE: ${{ needs.plan.outputs.profile }}
+          SCENARIO: ${{ matrix.scenario }}
         run: |
           args=()
           for dir in ../plugins/plugin-*; do
             label=${dir##*/plugin-}
             args+=(--jar "$label=$dir/aws.greengrass.DiskSpooler.jar" --ref "$label=$(cat "$dir/REF")")
           done
-          python -m spoolbench run --profile "scenarios/${{ needs.plan.outputs.profile }}.yaml" "${args[@]}" \
-            --only "^${{ matrix.scenario }}$" --repeat "$REPEAT" --out results
+          # --fail-on-error: a scenario that could not run (e.g. the plugin did not load) fails the job
+          python -m spoolbench run --profile "scenarios/$PROFILE.yaml" "${args[@]}" \
+            --only "^$SCENARIO\$" --repeat "$REPEAT" --out results --fail-on-error
       - uses: actions/upload-artifact@v7
         if: always()
         with:
