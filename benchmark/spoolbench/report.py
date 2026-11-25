@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from . import projection
 from .compare import METRICS_BY_KEY, fmt, render, scenario_sort_key
 
 SCHEMA = "spoolbench-report/1"
@@ -234,6 +235,47 @@ def _key_table(results: List[Dict[str, Any]], labels: List[str]) -> List[str]:
     return lines
 
 
+def _duration(seconds: float) -> str:
+    if seconds < 3600:
+        return f"{seconds / 60:,.0f} min" if seconds >= 600 else f"{seconds / 60:,.1f} min"
+    return f"{seconds / 3600:,.1f} h" if seconds < 48 * 3600 else f"{seconds / 86400:,.1f} d"
+
+
+def _projection_section(projections: List[Dict[str, Any]], profile: Dict[str, Any]) -> List[str]:
+    limit = projection.spool_limit_bytes(profile)
+    names = [name for name, _ in projection.DURATIONS]
+    lines = ["## Disk needed for longer outages", "",
+             "Extrapolated from the outage of each scenario: while the internet is down nothing is delivered, so "
+             "spooler.db grows with the payload IBEMS publishes. *disk* = *disk B / payload B* × (*payload/s* × "
+             "outage duration − diskSpillThresholdBytes): the size spooler.db needs to keep **every** message of an "
+             "outage that long at that rate.", "",
+             f"⛔ The Nucleus caps the spool at `maxSizeInBytes` = {fmt(limit, 'bytes')} of payload. Once it is full "
+             "(*spool full after*) it rejects new publishes (*Message spool is full*): the database stops growing at "
+             "*db at spool limit* and the messages after that are lost. Keeping them needs a larger `maxSizeInBytes` "
+             "as well as the disk. Device-crash scenarios are not extrapolated.", "",
+             "| scenario | build | outage msg/s | payload/s | disk B / payload B | disk / hour | "
+             + " | ".join(names) + " | spool full after | db at spool limit |",
+             "|---|---|" + "---:|" * (6 + len(names))]
+    borrowed = False
+    for p in projections:
+        ratio = fmt(p["disk_per_payload"], "ratio")
+        if p["disk_per_payload_from"]:
+            ratio += " ¹"
+            borrowed = True
+        cells = [fmt(p["msg_rate"], "rate"), fmt(p["payload_rate_bytes_s"], "bytes"), ratio,
+                 fmt(p["disk_bytes_per_hour"], "bytes")]
+        cells += [fmt(d["disk_bytes"], "bytes") + (" ⛔" if d["over_spool_limit"] else "")
+                  for d in p["durations"].values()]
+        cells += [_duration(p["spool_full_after_s"]), fmt(p["disk_at_spool_limit_bytes"], "bytes")]
+        lines.append(f"| {p['scenario']} | {p['label']} | " + " | ".join(cells) + " |")
+    if not projections:
+        lines.append("| no scenario to extrapolate from |")
+    if borrowed:
+        lines += ["", "¹ too little of this outage went to disk (most of it stayed in RAM below the spill threshold): "
+                      "disk B / payload B of the same build's scenario that wrote the most to disk."]
+    return lines
+
+
 def _phase_table(result: Dict[str, Any]) -> List[str]:
     lines = ["| phase | duration | accepted | rejected | delivered | accepted/s | delivered/s | IPC p99 | e2e p50 | "
              "CPU | backlog end | db end | RSS end |",
@@ -268,6 +310,8 @@ def build(out: Path) -> Path:
     report = {"schema": SCHEMA, "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
               **meta, "labels": {label: meta.get("labels", {}).get(label, {}) for label in labels},
               "results": results}
+    projections = projection.project(results, meta.get("profile", {}))
+    report["disk_projection"] = projections
     (out / "report.json").write_text(json.dumps(report, indent=2, default=str))
 
     colours = {label: SERIES_COLOURS[i % len(SERIES_COLOURS)] for i, label in enumerate(labels)}
@@ -304,6 +348,7 @@ def build(out: Path) -> Path:
               "new messages. *lost*: accepted by the Nucleus but never delivered.", ""]
     lines += _key_table(results, labels)
     lines.append("")
+    lines += _projection_section(projections, profile) + [""]
 
     if len(labels) >= 2:
         text, _ = render(report, labels[0], report, labels[1])

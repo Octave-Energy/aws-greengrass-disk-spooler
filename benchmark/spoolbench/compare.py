@@ -92,6 +92,8 @@ def fmt(value: Any, unit: str) -> str:
     if unit == "bool":
         return "yes" if value else "no"
     if unit == "bytes":
+        if abs(value) >= 1024 * MIB:
+            return f"{value / (1024 * MIB):,.1f} GiB"
         if abs(value) >= MIB:
             return f"{value / MIB:,.1f} MiB"
         if abs(value) >= KIB:

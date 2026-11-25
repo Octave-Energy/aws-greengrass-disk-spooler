@@ -96,6 +96,12 @@ PNGs, shown as the job summary in GitHub Actions (which renders Mermaid but no i
   - *If RAM is used, how much?* `heap for backlog` (live heap at the end of the outage minus online, both after a full
     GC), `RSS peak`; in detail the number of `SpoolMessage` objects in the heap per checkpoint
   - *Do we lose messages?* `lost`, `dup`, `rejected`
+- **Disk needed for longer outages**: per scenario, the spooler.db size needed to keep every message of a 1 h, 6 h,
+  12 h, 1 d and 7 d outage at that rate, extrapolated from the measured outage: *disk B / payload B* × (payload rate ×
+  duration − `diskSpillThresholdBytes`). Also when the spool is full: the Nucleus caps it at
+  `mqtt.spooler.maxSizeInBytes` of payload (60 MiB in production) and then rejects new publishes (*Message spool is
+  full*), which at 10 msg/s happens after about 50 minutes, at 100 msg/s after about 5. Outages longer than that need
+  a larger `maxSizeInBytes` as well as the disk.
 - **Comparison** (two builds): every headline metric with its direction and a noise tolerance; changes within the
   tolerance are shown as ≈.
 - **Scenarios**: charts (throughput, backlog, database size, heap, RSS; the builds overlaid, aligned on the start of
@@ -151,5 +157,6 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | `spoolbench/broker.py`, `certs.py` | Mosquitto and its test PKI |
 | `spoolbench/probe.py` | process, JVM and database metrics |
 | `spoolbench/report.py`, `compare.py` | report, charts and comparison (metrics, directions, tolerances) |
+| `spoolbench/projection.py` | disk needed for longer outages, extrapolated from the measured one |
 | `scenarios/*.yaml` | the profiles |
 | `proto/` | the IBEMS measurement schema |
