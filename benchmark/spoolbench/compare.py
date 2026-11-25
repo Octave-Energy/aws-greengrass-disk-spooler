@@ -3,6 +3,10 @@ Compares two builds (labels) scenario by scenario, from one report.json or from 
 
 Every headline metric has a direction (lower or higher is better, or informational) and a noise tolerance: a change
 within max(relative tolerance x baseline, absolute tolerance) is reported as unchanged.
+
+Recovery is judged from the first delivery after the link came back. Before that the Nucleus MQTT client is still
+reconnecting: it retries with growing pauses, so the wait is luck and not the spooler. That wait, and what grows while
+it lasts (spooler.db size, backlog at the end of recovery, failed connect attempts), is shown but not judged.
 """
 
 import json
@@ -12,6 +16,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 KIB = 1024
 MIB = 1024 * 1024
+
+# smallest backlog to measure the delivery capacity on: about ten seconds of delivery
+MIN_CAPACITY_BACKLOG_MSGS = 1000
 
 
 @dataclass(frozen=True)
@@ -36,7 +43,8 @@ METRICS: List[Metric] = [
     Metric("Delivery", "backlog_online_end_msgs", "backlog at end of online phase", "count", "lower", 0.25, 20),
     Metric("Delivery", "e2e_latency_p50_ms", "end-to-end latency p50 (online)", "ms", "lower", 0.25, 5),
     Metric("Delivery", "e2e_latency_p99_ms", "end-to-end latency p99 (online)", "ms", "lower", 0.5, 20),
-    Metric("Delivery", "recovery_delivery_rate_msg_s", "delivered msg/s while catching up", "rate", "higher", 0.1, 2),
+    Metric("Delivery", "recovery_delivery_rate_after_first_delivery_msg_s",
+           "delivered msg/s while catching up (from the first delivery)", "rate", "higher", 0.1, 2),
     Metric("Delivery", "cooldown_delivery_rate_msg_s", "delivery capacity, msg/s (backlog, no input)", "rate",
            "higher", 0.1, 2),
     Metric("Outage", "outage_accepted_msgs", "messages accepted during the outage", "count", None),
@@ -47,8 +55,10 @@ METRICS: List[Metric] = [
     Metric("Disk", "disk_db_growth_outage_bytes", "spooler.db growth during the outage", "bytes", "lower", 0.1,
            64 * KIB),
     Metric("Disk", "disk_bytes_per_payload_byte", "disk bytes per spooled payload byte", "ratio", "lower", 0.05, 0.02),
-    Metric("Disk", "disk_db_bytes_peak", "spooler.db peak size", "bytes", "lower", 0.1, 64 * KIB),
-    Metric("Disk", "disk_db_bytes_after_stop", "spooler.db size after drain and stop", "bytes", "lower", 0.1, 64 * KIB),
+    # also holds what was spooled while the MQTT client reconnected
+    Metric("Disk", "disk_db_bytes_peak", "spooler.db peak size (depends on reconnect timing)", "bytes", None),
+    Metric("Disk", "disk_db_bytes_after_stop", "spooler.db size after drain and stop (depends on reconnect timing)",
+           "bytes", None),
     Metric("Disk", "disk_write_bytes_outage", "bytes written to storage during the outage (Linux)", "bytes", "lower",
            0.15, MIB),
     Metric("Disk", "disk_write_amplification", "storage bytes written per payload byte (Linux)", "ratio", "lower",
@@ -63,11 +73,15 @@ METRICS: List[Metric] = [
     Metric("Memory", "rss_peak_bytes", "Nucleus RSS peak", "bytes", "lower", 0.15, 16 * MIB),
     Metric("Memory", "rss_growth_outage_bytes", "RSS growth during the outage (depends on GC timing)", "bytes", None),
     Metric("Recovery", "recovery_backlog_msgs", "backlog when the link came back", "count", None),
-    Metric("Recovery", "recovery_first_delivery_s", "first delivery after the link came back", "s", "lower", 0.5, 1),
-    Metric("Recovery", "recovery_drain_s", "time to deliver the outage backlog", "s", "lower", 0.15, 2),
-    Metric("Recovery", "recovery_drain_rate_msg_s", "outage backlog / drain time, msg/s", "rate", "higher", 0.1, 2),
+    Metric("Recovery", "recovery_first_delivery_s", "first delivery after the link came back (MQTT reconnect)", "s",
+           None),
+    Metric("Recovery", "recovery_drain_after_first_delivery_s",
+           "time to deliver the outage backlog, from the first delivery", "s", "lower", 0.15, 2),
+    Metric("Recovery", "recovery_drain_rate_after_first_delivery_msg_s",
+           "outage backlog / drain time from the first delivery, msg/s", "rate", "higher", 0.1, 2),
     Metric("Recovery", "recovery_drained", "outage backlog fully delivered", "bool", "higher", 0, 0),
-    Metric("Recovery", "backlog_recovery_end_msgs", "backlog at end of recovery", "count", "lower", 0.25, 20),
+    Metric("Recovery", "backlog_recovery_end_msgs", "backlog at end of recovery (depends on reconnect timing)",
+           "count", None),
     Metric("Integrity", "lost_msgs", "accepted but never delivered (lost)", "count", "lower", 0, 0),
     Metric("Integrity", "undelivered_msgs", "still undelivered when the benchmark stopped waiting", "count", "lower",
            0, 0),
@@ -76,7 +90,10 @@ METRICS: List[Metric] = [
     Metric("Integrity", "out_of_order_msgs", "delivered out of order", "count", None),
     Metric("Robustness", "startup_s", "Nucleus start until spooler ready", "s", "lower", 0.3, 1),
     Metric("Robustness", "reboot_s", "start after the device crash until spooler ready", "s", "lower", 0.3, 1),
-    Metric("Robustness", "log_errors", "ERROR log events", "count", "lower", 0, 0),
+    Metric("Robustness", "log_errors_without_mqtt_connect", "ERROR log events, without failed MQTT connects",
+           "count", "lower", 0, 0),
+    Metric("Robustness", "log_mqtt_connect_failed", "failed MQTT connect attempts (while the link was down)", "count",
+           None),
     Metric("Robustness", "log_warnings", "WARN log events", "count", "lower", 0.5, 5),
     Metric("Robustness", "log_disk_add_failed_fallback_to_memory", "'Disk Spooler failed to add Message' events",
            "count", "lower", 0, 0),

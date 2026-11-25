@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import certs as certs_module
+from .compare import MIN_CAPACITY_BACKLOG_MSGS
 from .config import Scenario, Settings
 from . import nucleus as nucleus_module
 from .broker import Broker
@@ -221,6 +222,11 @@ class ScenarioRun:
             if self.nucleus.process.poll() is not None:
                 raise RuntimeError(f"Nucleus exited with {self.nucleus.process.returncode}")
         result["first_delivery_s"] = round(first_delivery_s, 3) if first_delivery_s is not None else None
+        # Until the first delivery the MQTT client is still reconnecting: it retries with growing pauses, so whether
+        # the link comes back just before or just after an attempt is luck. From the first delivery on it is the
+        # spooler that sets the pace.
+        if result["drain_s"] and first_delivery_s is not None:
+            result["drain_after_first_delivery_s"] = round(max(result["drain_s"] - first_delivery_s, 0.001), 3)
         # rate at which the backlog went down, up to the last progress (a stall at the end does not count)
         progress_s = last_progress - started
         delivered = backlog - (0 if result["drained"] else best)
@@ -503,10 +509,18 @@ class ScenarioRun:
             if recovery.get("drain_s") else None,
             "recovery_drained": recovery.get("drained"),
             "recovery_delivery_rate_msg_s": phases.get("recovery", {}).get("delivered_rate"),
+            # the same three without the reconnect: counted from the first delivery after the link came back
+            "recovery_drain_after_first_delivery_s": recovery.get("drain_after_first_delivery_s"),
+            "recovery_drain_rate_after_first_delivery_msg_s":
+                round(recovery["backlog_msgs"] / recovery["drain_after_first_delivery_s"], 1)
+                if recovery.get("drain_after_first_delivery_s") else None,
+            "recovery_delivery_rate_after_first_delivery_msg_s": self._rate_after_first_delivery(
+                phases.get("recovery", {}), recovery.get("first_delivery_s")),
             "backlog_recovery_end_msgs": phases.get("recovery", {}).get("backlog_end"),
             # with no new messages and a backlog to work through, the delivery rate is the spooler's capacity
+            # (a backlog of a few hundred is gone in seconds: too short to measure a rate)
             "cooldown_delivery_rate_msg_s": cooldown.get("delivery_rate_msg_s")
-            if cooldown.get("backlog_msgs", 0) >= 100 else None,
+            if cooldown.get("backlog_msgs", 0) >= MIN_CAPACITY_BACKLOG_MSGS else None,
             "cpu_pct_recovery": phases.get("recovery", {}).get("cpu_pct"),
             # integrity
             # accepted by the Nucleus (IPC publish succeeded) but never delivered to the cloud
@@ -523,10 +537,22 @@ class ScenarioRun:
             "startup_s": self.events.get("startup_s"),
             "reboot_s": self.events.get("reboot_s"),
             "log_errors": log.get("error"),
+            # the MQTT client retrying while the link is down logs an ERROR per attempt: that depends on the outage
+            "log_errors_without_mqtt_connect": log["error"] - log.get("error_mqtt_connect", 0)
+            if log.get("error") is not None else None,
+            "log_mqtt_connect_failed": log.get("error_mqtt_connect"),
             "log_warnings": log.get("warn"),
             **{f"log_{key}": value for key, value in patterns.items()},
         }
         return summary
+
+    @staticmethod
+    def _rate_after_first_delivery(phase: Dict[str, Any], first_delivery_s: Optional[float]) -> Optional[float]:
+        """Messages delivered in a phase per second, counted from the first delivery of that phase on."""
+        if first_delivery_s is None or phase.get("delivered") is None or phase.get("duration_s") is None:
+            return None
+        seconds = phase["duration_s"] - first_delivery_s
+        return round(phase["delivered"] / seconds, 2) if seconds > 0 else None
 
     def _results(self) -> Dict[str, Any]:
         phases = self._phase_metrics() if self.rows else {}

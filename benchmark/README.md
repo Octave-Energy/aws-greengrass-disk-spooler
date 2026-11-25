@@ -65,7 +65,11 @@ Each scenario runs through these phases:
    This is a crash of the processes, not a cut of the power supply: the operating system keeps running, so data
    the spooler wrote but the operating system had not yet flushed to storage survives here, where a real power cut
    could lose it. It shows what the spooler keeps across a crash or reboot, not whether its writes are durable.
-6. **recovery**: the internet is back; the simulator keeps publishing; until the backlog of the outage is delivered
+6. **recovery**: the internet is back; the simulator keeps publishing; until the backlog of the outage is delivered.
+   Nothing is delivered until the Nucleus MQTT client has reconnected. It retries with growing pauses (about 10 s at
+   first, later 30 s and more), so that wait depends on when the link came back relative to its next attempt: from a
+   fraction of a second to more than a minute, different from run to run. The recovery metrics are therefore counted
+   from the first delivery on; the wait itself is reported as *reconnect*, but not compared
 7. **cooldown**: the simulator stops; until every accepted message is delivered, or nothing more arrives
    (then the rest is lost); then a graceful stop and the final database size
 
@@ -132,7 +136,11 @@ PNGs, shown as the job summary in GitHub Actions (which renders Mermaid but no i
   full*), which at 10 msg/s happens after about 50 minutes, at 100 msg/s after about 5. Outages longer than that need
   a larger `maxSizeInBytes` as well as the disk.
 - **Comparison** (two builds): every headline metric with its direction and a noise tolerance; changes within the
-  tolerance are shown as ≈.
+  tolerance are shown as ≈. What depends on the reconnect wait is shown but not judged better or worse: the wait
+  itself, the spooler.db size (IBEMS keeps publishing while the Nucleus reconnects, so a long wait spools more), the
+  backlog at the end of recovery and the failed connect attempts (ERROR log events are compared without them). With
+  one run per scenario, a single difference can still be chance: `--repeat` (*Repetitions* in the workflow) runs
+  every scenario several times and compares the means.
 - **Scenarios**: charts (throughput, backlog, database size, heap, RSS; the builds overlaid, aligned on the start of
   the outage), and per build the phases, memory checkpoints and most frequent log events.
 
