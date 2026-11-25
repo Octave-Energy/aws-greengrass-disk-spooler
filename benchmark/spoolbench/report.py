@@ -246,6 +246,19 @@ def _key_table(results: List[Dict[str, Any]], labels: List[str]) -> List[str]:
     return lines
 
 
+def _scenario_types(results: List[Dict[str, Any]]) -> str:
+    """Explains the kinds of scenario in this report, and only those (the quick profile has no reset, for example)."""
+    params = [r["scenario_params"] for r in results]
+    types = ["`…-outage` the link to AWS IoT Core is down while the device keeps running and the spooler takes over"]
+    if any(p.get("device_crash") or p.get("power_loss") for p in params):
+        types.append("`…-outage-devicecrash` the whole device also crashes during the outage and boots again while "
+                     "still offline")
+    if any(p.get("outage_mode") == "reset" for p in params):
+        types.append("`…-outage-reset` the connections are reset instead of black-holed")
+    return ("Every scenario has an **internet outage**: " + "; ".join(types) + ". `r<rate>` is the publish rate in "
+            "msg/s, `spill<threshold>` the diskSpillThresholdBytes (spill0: disk only, no RAM).")
+
+
 def _duration(seconds: float) -> str:
     if seconds < 3600:
         return f"{seconds / 60:,.0f} min" if seconds >= 600 else f"{seconds / 60:,.1f} min"
@@ -343,11 +356,7 @@ def build(out: Path) -> Path:
               f"{fmt(payloads.get('max_bytes'), 'bytes')}.", ""]
 
     lines += ["## Key results", "",
-              "Every scenario has an **internet outage**: `…-outage` the link to AWS IoT Core is down while the device "
-              "keeps running and the spooler takes over; `…-outage-devicecrash` the whole device also crashes during "
-              "the outage and boots again while still offline; `…-outage-reset` the connections are reset instead of "
-              "black-holed. `r<rate>` is the publish rate in msg/s, `spill<threshold>` the diskSpillThresholdBytes "
-              "(spill0: disk only, no RAM).", "",
+              _scenario_types(results), "",
               "Online: steady state with the link up. Outage: the internet is down and the spooler takes over. "
               "*e2e*: from creation of the batch to reception in the cloud. *db growth*: spooler.db (+journal) growth "
               "during the outage; *disk B / payload B*: that growth per spooled payload byte. *heap for backlog*: live "
