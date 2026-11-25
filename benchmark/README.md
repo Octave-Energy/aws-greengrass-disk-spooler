@@ -36,7 +36,18 @@ If the Nucleus cannot accept messages at the target rate, the shortfall is repor
 
 ## Scenarios
 
-A scenario is a publish rate and a `diskSpillThresholdBytes` value, run through these phases:
+Every scenario simulates an **internet outage** while IBEMS keeps publishing. A scenario name says what happens:
+
+| scenario | what happens |
+|---|---|
+| `r<rate>-spill<threshold>-outage` | **internet outage**: the link to AWS IoT Core is down, the device keeps running and the spooler takes over |
+| `…-outage-devicecrash` | **internet outage + device crash**: during the outage the whole device goes down (Nucleus, spooler, IBEMS) and boots again while the internet is still down |
+| `…-outage-reset` | **internet outage** where the connections are reset (closed at once) instead of black-holed |
+
+`<rate>` is the IBEMS publish rate in messages per second, `<threshold>` the plugin's `diskSpillThresholdBytes`
+(`spill0`: everything goes to disk, no RAM; `spill300k`: production, the first 300 KiB of backlog stays in RAM).
+
+Each scenario runs through these phases:
 
 1. **startup**: the Nucleus starts and sets up the persistent spooler (the run fails if it falls back to memory)
 2. **connect**, **warmup**: until messages reach the cloud, then a few seconds of steady state
@@ -45,7 +56,7 @@ A scenario is a publish rate and a `diskSpillThresholdBytes` value, run through 
    on a dead uplink: the Nucleus only notices through its MQTT keep-alive) or reset (connections closed). The device
    itself keeps running: IBEMS keeps publishing and the spooler takes over, first memory, up to
    `diskSpillThresholdBytes`, then disk
-5. **device crash** (optional, `device_crash: true`, scenarios `…-devicecrash`): during the internet outage the
+5. **device crash** (optional, `device_crash: true`, scenarios `…-outage-devicecrash`): during the internet outage the
    whole device goes down. The Nucleus, the spooler and IBEMS are killed at once (SIGKILL: no shutdown, nothing is
    flushed), whatever was only in memory is lost, and the connections the device had open die with it. The device
    then boots again (**offline_after_reboot**): the Nucleus starts, the spooler reopens its database and IBEMS

@@ -225,7 +225,12 @@ def build(out: Path) -> Path:
               f"{fmt(payloads.get('max_bytes'), 'bytes')}.", ""]
 
     lines += ["## Key results", "",
-              "Online: steady state with the link up. Outage: the link is black-holed and the spooler takes over. "
+              "Every scenario has an **internet outage**: `…-outage` the link to AWS IoT Core is down while the device "
+              "keeps running and the spooler takes over; `…-outage-devicecrash` the whole device also crashes during "
+              "the outage and boots again while still offline; `…-outage-reset` the connections are reset instead of "
+              "black-holed. `r<rate>` is the publish rate in msg/s, `spill<threshold>` the diskSpillThresholdBytes "
+              "(spill0: disk only, no RAM).", "",
+              "Online: steady state with the link up. Outage: the internet is down and the spooler takes over. "
               "*e2e*: from creation of the batch to reception in the cloud. *db growth*: spooler.db (+journal) growth "
               "during the outage; *disk B / payload B*: that growth per spooled payload byte. *heap for backlog*: live "
               "heap (after a full GC) at the end of the outage minus online. *drain*: time to deliver the outage "

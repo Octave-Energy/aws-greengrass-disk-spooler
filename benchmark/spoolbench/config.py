@@ -43,11 +43,13 @@ class Settings:
 def scenario_name(params: Dict[str, Any]) -> str:
     spill = params["spill_threshold_bytes"]
     spill_text = f"{spill // 1024}k" if spill and spill % 1024 == 0 else str(spill)
-    name = f"r{params['rate']:g}-spill{spill_text}"
-    if params.get("device_crash"):
-        name += "-devicecrash"
+    # every scenario has an internet outage; "-reset" when its connections are reset rather than black-holed, and
+    # "-devicecrash" when the device also crashes during it
+    name = f"r{params['rate']:g}-spill{spill_text}-outage"
     if params.get("outage_mode", "blackhole") != "blackhole":
         name += f"-{params['outage_mode']}"
+    if params.get("device_crash"):
+        name += "-devicecrash"
     return name
 
 
