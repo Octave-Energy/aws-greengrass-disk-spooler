@@ -34,7 +34,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class DiskSpoolConcurrencyTest {
 
     private static final int THREADS = 5;
-    private static final int MESSAGES = 4000;
+    /**
+     * Messages written to disk. Windows waits for every database write to reach the disk, so these are slow there.
+     */
+    private static final int MESSAGES = 1000;
+    /**
+     * Messages kept in memory. These cost no disk writes, and many of them give the threads more chances to race.
+     */
+    private static final int IN_MEMORY_MESSAGES = 20_000;
 
     @TempDir
     Path currDir;
@@ -48,7 +55,7 @@ class DiskSpoolConcurrencyTest {
                 dao.insertSpoolMessage(message(id));
             }
 
-            runConcurrently(id -> dao.removeSpoolMessageById(id), 1);
+            runConcurrently(id -> dao.removeSpoolMessageById(id), MESSAGES, 1);
 
             assertEquals(Collections.emptyList(), toList(dao.getAllSpoolMessageIds()));
         } finally {
@@ -62,20 +69,21 @@ class DiskSpoolConcurrencyTest {
         try (Context context = new Context()) {
             Configuration config = new Configuration(context);
             config.mergeMap(1000, Collections.singletonMap("configuration",
-                    // half of the 5-byte messages stay in memory, the rest spills to disk
-                    Collections.singletonMap("diskSpillThresholdBytes", MESSAGES / 2 * 5)));
+                    // the first IN_MEMORY_MESSAGES 5-byte messages stay in memory, the rest spills to disk
+                    Collections.singletonMap("diskSpillThresholdBytes", IN_MEMORY_MESSAGES * 5)));
             DiskSpoolDAO dao = new DiskSpoolDAO(currDir.resolve("spooler.db"));
             dao.initialize();
             try {
                 DiskSpool spool = new DiskSpool(config.getRoot(), dao);
-                for (long id = 0; id < MESSAGES; id++) {
+                int total = IN_MEMORY_MESSAGES + MESSAGES / 2;
+                for (long id = 0; id < total; id++) {
                     spool.add(id, message(id));
                 }
-                assertEquals(MESSAGES / 2 * 5, spool.getInMemorySpoolSize());
+                assertEquals(IN_MEMORY_MESSAGES * 5, spool.getInMemorySpoolSize());
                 assertEquals(MESSAGES / 2, toList(dao.getAllSpoolMessageIds()).size());
 
                 // Nucleus can remove the same id twice, e.g. after a non-retryable PUBACK
-                runConcurrently(spool::removeMessageById, 2);
+                runConcurrently(spool::removeMessageById, total, 2);
 
                 assertEquals(0, spool.getInMemorySpoolSize());
                 assertEquals(Collections.emptyList(), toList(spool.getAllMessageIds()));
@@ -90,9 +98,10 @@ class DiskSpoolConcurrencyTest {
     }
 
     /**
-     * Each thread removes every THREADS-th id, {@code times} times in a row, all threads starting together.
+     * Each thread removes every THREADS-th id below {@code count}, {@code times} times in a row, all threads starting
+     * together.
      */
-    private static void runConcurrently(Remover remover, int times) throws Exception {
+    private static void runConcurrently(Remover remover, int count, int times) throws Exception {
         ExecutorService executor = Executors.newFixedThreadPool(THREADS);
         CountDownLatch start = new CountDownLatch(1);
         List<Future<Void>> futures = new ArrayList<>();
@@ -101,7 +110,7 @@ class DiskSpoolConcurrencyTest {
                 int first = t;
                 futures.add(executor.submit(() -> {
                     start.await();
-                    for (long id = first; id < MESSAGES; id += THREADS) {
+                    for (long id = first; id < count; id += THREADS) {
                         for (int i = 0; i < times; i++) {
                             remover.remove(id);
                         }
