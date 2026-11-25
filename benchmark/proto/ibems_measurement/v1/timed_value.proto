@@ -1,0 +1,50 @@
+syntax = "proto3";
+package ibems_measurement.v1;
+
+// Wrapper messages for repeated fields inside oneof (proto3 does not allow repeated directly in oneof)
+message Int32List {
+  repeated int32 values = 1;
+}
+
+message StringList {
+  repeated string values = 1;
+}
+
+message TimedValue {
+  // time offset in milliseconds from the base time this measurements batch
+  uint32 time_offset_ms = 1;
+
+  oneof value {
+    float float_value = 2;
+    double double_value = 3;
+    uint32 uint32_value = 4;
+    string string_value = 5;
+    bool bool_value = 6;
+
+    // Multi-value measurements
+    Int32List multi_int32_value = 7;
+    StringList multi_string_value = 8;
+  }
+}
+
+// Notes on float vs double:
+
+// double-precision floating point (8 bytes):
+// min/max value: +/- 2**63 − 1 = +/-9_223_372_036_854_775_808
+// precision: 
+//   between 2**n and 2**(n+1): fixed interval is 2**(n−52).
+//   e.g:
+//     between 1 and 2:                                                      precision of 2**-51
+//     between 126 and 256:                                                  precision of 2**-43 = ~1.13E-13
+//     between 32512 and 65536:                                              precision of 2**-35 = ~2.91E-11
+//     between 2**52=4_503_599_627_370_496 and 2**53=9_007_199_254_740_992:  precision of 2**-0 = 1
+
+// single-precision floating point (4 bytes):
+// min/max value: +/- 2**31 − 1 = +/-2,147,483,647
+// precision: 
+//   between 2**n and 2**(n+1): fixed interval 2n−23
+//   e.g:
+//     between 1 and 2:                               precision of 2**-23
+//     between 126 and 256:                           precision of 2**-14 = ~0.00001
+//     between 32512 and 65536:                       precision of 2**-8 = ~0.004
+//     between 2**23=8_388_608 and 2**24=16_777_216:  precision of 2**-0 = 1

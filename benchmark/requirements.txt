@@ -1,0 +1,9 @@
+# Same AWS IoT Device SDK and protobuf runtime as IBEMS (Python 3.13, protobuf 6.33.5, awsiotsdk >= 1.29)
+awsiotsdk==1.31.0
+awscrt==0.36.1
+protobuf==6.33.5
+grpcio-tools==1.81.2
+paho-mqtt==2.2.0
+psutil==7.2.2
+PyYAML==6.0.4
+matplotlib==3.11.2

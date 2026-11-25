@@ -7,6 +7,10 @@ on:
   pull_request:
     branches: '*'
 
+permissions:
+  contents: read
+  pull-requests: write  # the coverage report comment
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
@@ -14,20 +18,21 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # required by wagoid/commitlint-github-action to validate range of commits instead of just the latest one
       - uses: wagoid/commitlint-github-action@v6
         if: matrix.os == 'ubuntu-latest'
       - name: Set up JDK 1.8
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: corretto
           java-version: 8
           cache: maven
-      - run: rm -rf /tmp/*
+      - name: Clean /tmp
+        # files of the runner itself cannot be removed: ignore them instead of failing the step
+        run: rm -rf /tmp/* 2>/dev/null || true
         if: matrix.os == 'ubuntu-latest'
-        continue-on-error: true
       - name: Build with Maven (not Windows)
         env:
           AWS_REGION: us-west-2
@@ -40,39 +45,26 @@ jobs:
         shell: cmd
         if: matrix.os == 'windows-latest'
       - name: Upload Failed Test Report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         if: failure()
         with:
-          name: Failed Test Report
+          name: Failed Test Report ${{ matrix.os }}
           path: target/surefire-reports
       - name: Upload Coverage
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         if: matrix.os == 'ubuntu-latest'
         with:
           name: Coverage Report ${{ matrix.os }}
           path: target/jacoco-report
-      - name: Convert Jacoco unit test report to Cobertura
+      - name: Coverage report
         if: matrix.os == 'ubuntu-latest'
-        run: python3 .github/scripts/cover2cover.py target/jacoco-report/jacoco.xml src/main/java > target/jacoco-report/cobertura.xml
-      - name: cobertura-report-unit-test
-        if: matrix.os == 'ubuntu-latest'
-        uses: 5monkeys/cobertura-action@v14
-        continue-on-error: true
+        uses: madrapps/jacoco-report@v1
         with:
-          # The GITHUB_TOKEN for this repo
-          repo_token: ${{ github.token }}
-          # Path to the cobertura file.
-          path: target/jacoco-report/cobertura.xml
-          # If files with 100% should be skipped from report.
-          skip_covered: false
-          # Minimum allowed coverage percentage as an integer.
-          minimum_coverage: 65
-          # Show line rate as specific column.
-          show_line: true
-          # Show branch rate as specific column.
-          show_branch: true
-          # Use class names instead of the filename
-          show_class_names: true
-          # Use a unique name for the report and comment
-          report_name: Unit Tests Coverage Report
-          only_changed_files: true
+          paths: ${{ github.workspace }}/target/jacoco-report/jacoco.xml
+          token: ${{ github.token }}
+          title: Unit Tests Coverage Report
+          update-comment: true
+          comment-type: both  # PR comment and job summary
+          min-coverage-overall: 65
+          # report, do not gate: a coverage drop or a missing permission (PRs from forks) only logs a warning
+          continue-on-error: true

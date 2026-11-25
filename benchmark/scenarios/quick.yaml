@@ -1,0 +1,43 @@
+# Quick profile: run on every pull request. About 2-3 minutes per scenario and per plugin build.
+#
+# The Nucleus and spooler settings are those of production (octave-ibems deployment/generate_greengrass_deployment.py):
+# Nucleus 2.18.3, disk spooler with a 60 MiB spool, JSON logs at INFO. Only diskSpillThresholdBytes varies per scenario:
+# 0 (every message goes to disk, no RAM) and 307200 (production: the first 300 KiB of backlog stays in RAM).
+
+nucleus_version: 2.18.3
+nucleus_configuration:
+  mqtt:
+    spooler:
+      storageType: Disk
+      maxSizeInBytes: 62914560
+  logging:
+    level: INFO
+    format: JSON
+plugin_configuration: {}
+jvm_options: []
+
+seed: 42
+# IBEMS awaits every publish before sending the next batch: one publish in flight
+max_outstanding: 1
+payload_profile: {small: 0.85, medium: 0.13, large: 0.02}
+
+defaults:
+  warmup_s: 5
+  online_s: 15
+  outage_s: 30
+  offline_after_reboot_s: 10
+  max_drain_s: 180
+  stall_s: 45
+  cooldown_s: 20
+
+# every combination becomes an internet outage scenario named r<rate>-spill<threshold>-outage. AWS IoT Core accepts at most 100 publishes per
+# second per connection and the Nucleus throttles to that: 100 msg/s is the limit, a backlog then never drains.
+matrix:
+  rate: [10, 50, 100]
+  spill_threshold_bytes: [0, 307200]
+
+# extra scenarios: during the internet outage the whole device crashes (Nucleus, spooler and IBEMS killed at once,
+# no shutdown) and boots again while the internet is still down
+scenarios:
+  - {rate: 100, spill_threshold_bytes: 0, device_crash: true}
+  - {rate: 100, spill_threshold_bytes: 307200, device_crash: true}
