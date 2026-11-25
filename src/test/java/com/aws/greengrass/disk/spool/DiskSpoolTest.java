@@ -70,35 +70,39 @@ public class DiskSpoolTest {
             );
             DiskSpoolDAOFake daoFake = new DiskSpoolDAOFake(currDir.resolve("spooler.db"));
             daoFake.initialize();
+            // close the database at the end: Windows cannot delete the temporary directory of an open database
+            try {
+                DiskSpool spool = new DiskSpool(config.getRoot(), daoFake);
 
-            DiskSpool spool = new DiskSpool(config.getRoot(), daoFake);
+                for (long id = 1L; id <= 10000L; id++) {
+                    SpoolMessage message = SpoolMessage.builder()
+                            .id(id)
+                            .request(
+                                    Publish.builder()
+                                            .topic("spool")
+                                            .payload("Hello".getBytes(StandardCharsets.UTF_8))
+                                            .qos(QOS.AT_LEAST_ONCE)
+                                            .messageExpiryIntervalSeconds(2L)
+                                            .payloadFormat(Publish.PayloadFormatIndicator.BYTES)
+                                            .contentType("Test")
+                                            .build())
+                            .build();
+                    spool.add(id, message);
 
-            for (long id = 1L; id <= 10000L; id++) {
-                SpoolMessage message = SpoolMessage.builder()
-                        .id(id)
-                        .request(
-                                Publish.builder()
-                                        .topic("spool")
-                                        .payload("Hello".getBytes(StandardCharsets.UTF_8))
-                                        .qos(QOS.AT_LEAST_ONCE)
-                                        .messageExpiryIntervalSeconds(2L)
-                                        .payloadFormat(Publish.PayloadFormatIndicator.BYTES)
-                                        .contentType("Test")
-                                        .build())
-                        .build();
-                spool.add(id, message);
+                    // assert we can read it back from spool:
+                    SpoolMessage fromSpool = spool.getMessageById(id);
+                    assert fromSpool != null;
+                    assert fromSpool.getId() == id;
+                    assert new String(fromSpool.getRequest().getPayload(), StandardCharsets.UTF_8).equals("Hello");
 
-                // assert we can read it back from spool:
-                SpoolMessage fromSpool = spool.getMessageById(id);
-                assert fromSpool != null;
-                assert fromSpool.getId() == id;
-                assert new String(fromSpool.getRequest().getPayload(), StandardCharsets.UTF_8).equals("Hello");
-
-                // assert present in disk dao:
-                SpoolMessage fromDisk = daoFake.getSpoolMessageById(id);
-                assert fromDisk != null;
-                assert fromDisk.getId() == id;
-                assert new String(fromDisk.getRequest().getPayload(), StandardCharsets.UTF_8).equals("Hello");
+                    // assert present in disk dao:
+                    SpoolMessage fromDisk = daoFake.getSpoolMessageById(id);
+                    assert fromDisk != null;
+                    assert fromDisk.getId() == id;
+                    assert new String(fromDisk.getRequest().getPayload(), StandardCharsets.UTF_8).equals("Hello");
+                }
+            } finally {
+                daoFake.close();
             }
         }
     }
@@ -121,40 +125,44 @@ public class DiskSpoolTest {
             );
             DiskSpoolDAOFake daoFake = new DiskSpoolDAOFake(currDir.resolve("spooler.db"));
             daoFake.initialize();
+            // close the database at the end: Windows cannot delete the temporary directory of an open database
+            try {
+                DiskSpool spool = new DiskSpool(config.getRoot(), daoFake);
 
-            DiskSpool spool = new DiskSpool(config.getRoot(), daoFake);
+                for (long id = 1L; id <= 10000L; id++) {
+                    SpoolMessage message = SpoolMessage.builder()
+                            .id(id)
+                            .request(
+                                    Publish.builder()
+                                            .topic("spool")
+                                            .payload("Hello".getBytes(StandardCharsets.UTF_8))
+                                            .qos(QOS.AT_LEAST_ONCE)
+                                            .messageExpiryIntervalSeconds(2L)
+                                            .payloadFormat(Publish.PayloadFormatIndicator.BYTES)
+                                            .contentType("Test")
+                                            .build())
+                            .build();
+                    spool.add(id, message);
 
-            for (long id = 1L; id <= 10000L; id++) {
-                SpoolMessage message = SpoolMessage.builder()
-                        .id(id)
-                        .request(
-                                Publish.builder()
-                                        .topic("spool")
-                                        .payload("Hello".getBytes(StandardCharsets.UTF_8))
-                                        .qos(QOS.AT_LEAST_ONCE)
-                                        .messageExpiryIntervalSeconds(2L)
-                                        .payloadFormat(Publish.PayloadFormatIndicator.BYTES)
-                                        .contentType("Test")
-                                        .build())
-                        .build();
-                spool.add(id, message);
+                    // everything should always be readable from spool:
+                    SpoolMessage fromSpool = spool.getMessageById(id);
+                    assert fromSpool != null;
+                    assert fromSpool.getId() == id;
+                    assert new String(fromSpool.getRequest().getPayload(), StandardCharsets.UTF_8).equals("Hello");
 
-                // everything should always be readable from spool:
-                SpoolMessage fromSpool = spool.getMessageById(id);
-                assert fromSpool != null;
-                assert fromSpool.getId() == id;
-                assert new String(fromSpool.getRequest().getPayload(), StandardCharsets.UTF_8).equals("Hello");
-
-                SpoolMessage fromDisk = daoFake.getSpoolMessageById(id);
-                if (id <= 10L) {
-                    // first ten messages should be only in memory:
-                    assert fromDisk == null;
-                } else {
-                    // next ones should be spilled to disk:
-                    assert fromDisk != null;
-                    assert fromDisk.getId() == id;
-                    assert new String(fromDisk.getRequest().getPayload(), StandardCharsets.UTF_8).equals("Hello");
+                    SpoolMessage fromDisk = daoFake.getSpoolMessageById(id);
+                    if (id <= 10L) {
+                        // first ten messages should be only in memory:
+                        assert fromDisk == null;
+                    } else {
+                        // next ones should be spilled to disk:
+                        assert fromDisk != null;
+                        assert fromDisk.getId() == id;
+                        assert new String(fromDisk.getRequest().getPayload(), StandardCharsets.UTF_8).equals("Hello");
+                    }
                 }
+            } finally {
+                daoFake.close();
             }
         }
 
