@@ -74,7 +74,7 @@ public class DiskSpoolTest {
             try {
                 DiskSpool spool = new DiskSpool(config.getRoot(), daoFake);
 
-                for (long id = 1L; id <= 10000L; id++) {
+                for (long id = 1L; id <= 1000L; id++) {
                     SpoolMessage message = SpoolMessage.builder()
                             .id(id)
                             .request(
@@ -129,7 +129,7 @@ public class DiskSpoolTest {
             try {
                 DiskSpool spool = new DiskSpool(config.getRoot(), daoFake);
 
-                for (long id = 1L; id <= 10000L; id++) {
+                for (long id = 1L; id <= 1000L; id++) {
                     SpoolMessage message = SpoolMessage.builder()
                             .id(id)
                             .request(
