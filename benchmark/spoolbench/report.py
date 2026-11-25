@@ -19,6 +19,8 @@ from .compare import METRICS_BY_KEY, fmt, render, scenario_sort_key
 SCHEMA = "spoolbench-report/1"
 # reference categorical palette (validated for colour vision deficiencies), assigned in fixed order to the builds
 SERIES_COLOURS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+# the closest coloured square per series colour: Mermaid charts have no legend, the job summary shows these instead
+SERIES_SQUARES = ["🟦", "🟧", "🟩", "🟨"]
 OUTAGE_PHASES = ("outage", "device_crash", "offline_after_reboot")
 
 # columns of the key results table: (summary key, short header)
@@ -163,8 +165,17 @@ MERMAID_CHARTS = [
 MERMAID_POINTS = 60
 
 
-def _mermaid_charts(scenario: str, runs: Dict[str, Path], colours: Dict[str, str]) -> List[str]:
-    """The time series as Mermaid line charts, every build resampled onto one time grid (outage starts at 0)."""
+def _legend_entry(index: int, label: str, ref: Optional[str]) -> str:
+    """'🟦 **baseline** `main-octave@4a0f945`': the build in the colour of its chart line (index in SERIES_COLOURS)."""
+    square = SERIES_SQUARES[index] if index < len(SERIES_SQUARES) else f"`{SERIES_COLOURS[index % len(SERIES_COLOURS)]}`"
+    return f"{square} **{label}**" + (f" `{ref}`" if ref else "")
+
+
+def _mermaid_charts(scenario: str, runs: Dict[str, Path], colours: Dict[str, str],
+                    refs: Dict[str, str]) -> List[str]:
+    """The time series as Mermaid line charts, every build resampled onto one time grid (outage starts at 0).
+
+    Mermaid's xychart has no legend: every chart gets a line above it with the colour of each build."""
     series: Dict[str, List[Dict[str, Any]]] = {}
     for label, directory in runs.items():
         rows = _read_timeseries(directory / "timeseries.csv")
@@ -193,16 +204,16 @@ def _mermaid_charts(scenario: str, runs: Dict[str, Path], colours: Dict[str, str
             values.append(round((value or 0.0) / scale, 2))
         return values
 
-    labels = list(series)
-    legend = ", ".join(f"{label} {'blue' if i == 0 else 'orange' if i == 1 else f'#{i + 1}'}"
-                       for i, label in enumerate(labels))
-    lines = [f"Lines: {legend}. Time in seconds since the internet outage started.", ""]
+    # colours follow the build, as in the PNG charts, whichever builds this scenario has
+    labels = [label for label in colours if label in series]
+    legend = " · ".join(_legend_entry(list(colours).index(label), label, refs.get(label)) for label in labels)
+    lines = []
     palette = ", ".join(colours[label] for label in labels)
     for title, key, scale, per_second in MERMAID_CHARTS:
         data = {label: sample(rows, key, scale, per_second) for label, rows in series.items()}
         if not any(any(v) for v in data.values()):
             continue
-        lines += ["```mermaid", "---", "config:", "  xyChart:", "    width: 700", "    height: 260",
+        lines += [f"Lines: {legend}", "", "```mermaid", "---", "config:", "  xyChart:", "    width: 700", "    height: 260",
                   "  themeVariables:", "    xyChart:", f'      plotColorPalette: "{palette}"', "---", "xychart-beta",
                   f'  title "{scenario}: {title}"',
                   f"  x-axis \"seconds since the outage started\" {round(grid[0])} --> {round(grid[-1])}",
@@ -315,6 +326,7 @@ def build(out: Path) -> Path:
     (out / "report.json").write_text(json.dumps(report, indent=2, default=str))
 
     colours = {label: SERIES_COLOURS[i % len(SERIES_COLOURS)] for i, label in enumerate(labels)}
+    refs = {label: report["labels"][label].get("ref") for label in labels}
     env = meta.get("environment", {})
     profile = meta.get("profile", {})
     payloads = meta.get("payloads", {})
@@ -371,7 +383,7 @@ def build(out: Path) -> Path:
                      if params.get("device_crash") else "") + ".", ""]
         if chart:
             lines += [f"![{scenario}](charts/{chart.name})", ""]
-            summary_charts[len(lines) - 2] = _mermaid_charts(scenario, runs, colours)
+            summary_charts[len(lines) - 2] = _mermaid_charts(scenario, runs, colours, refs)
         for r in (r for r in results if r["scenario"] == scenario):
             title = f"{r['label']}" + (f" (repeat {r.get('repeat')})" if r.get("repeat", 1) != 1 else "")
             lines += [f"<details><summary>{title}: phases, memory checkpoints, log events</summary>", ""]
