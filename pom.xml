@@ -94,6 +94,7 @@
                             <excludes>
                                 <exclude>*</exclude>
                                 <exclude>codestyle/**</exclude>
+                                <exclude>benchmark/**</exclude>
                                 <exclude>src/*/resources/**</exclude>
                             </excludes>
                         </licenseSet>
