@@ -112,6 +112,7 @@ PNGs, shown as the job summary in GitHub Actions (which renders Mermaid but no i
 ### In GitHub Actions
 
 - Every pull request that touches the plugin runs the quick profile: PR head (candidate) against its base (baseline).
+  Every commit gets its own complete run: a follow-up commit does not cancel the run of the previous one.
 - *Actions → Spooler benchmark → Run workflow* benchmarks any two refs, e.g. baseline `main-octave` and candidate
   `sync-upstream-and-fix-spool-races`, with the quick or full profile. Leave the candidate empty to record a baseline.
 

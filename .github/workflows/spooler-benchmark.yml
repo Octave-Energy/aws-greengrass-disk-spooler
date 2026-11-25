@@ -43,9 +43,9 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: spooler-benchmark-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
+# No concurrency group: a follow-up commit must not cancel the benchmark of the previous one, nor wait for it. With a
+# group, GitHub keeps at most one pending run and cancels the others even without cancel-in-progress. Runs do not
+# disturb each other: every scenario job has a runner of its own.
 
 env:
   PYTHON_VERSION: '3.13'  # as IBEMS
