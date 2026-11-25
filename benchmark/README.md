@@ -53,10 +53,15 @@ A scenario is a publish rate and a `diskSpillThresholdBytes` value, run through 
 
 Profiles in `scenarios/`:
 
-- `quick.yaml` (every pull request): 10, 100 and 1000 msg/s × spill threshold 0 (disk only, no RAM) and 300 KiB
+- `quick.yaml` (every pull request): 10, 50 and 100 msg/s × spill threshold 0 (disk only, no RAM) and 300 KiB
   (production), 15 s online, 30 s outage, plus two power-loss scenarios.
 - `full.yaml` (on demand): same matrix, 60 s online, 180 s outage (longer than the MQTT keep-alive, so the Nucleus
-  drops the connection and reconnects; at 1000 msg/s the 60 MiB spool fills up), more power-loss scenarios, a reset.
+  drops the connection and reconnects), more power-loss scenarios, a reset.
+
+The rates stop at 100 msg/s: AWS IoT Core accepts at most 100 publish requests per second per MQTT connection
+(and 512 KB/s), and the Nucleus throttles its publishes to stay within that. The cloud-side delivery rate is
+therefore capped around 100 msg/s, and a backlog drains at about 100 msg/s minus the rate IBEMS keeps publishing
+at: at 100 msg/s it does not drain at all.
 
 The Nucleus and spooler settings are those of production (`octave-ibems/deployment/generate_greengrass_deployment.py`):
 Nucleus 2.18.3, `mqtt.spooler.storageType: Disk`, `maxSizeInBytes: 62914560`, JSON logs at INFO.
@@ -66,7 +71,7 @@ Nucleus 2.18.3, `mqtt.spooler.storageType: Disk`, `maxSizeInBytes: 62914560`, JS
 `report.md` (also the job summary in GitHub Actions), `report.json` and `charts/*.png`:
 
 - **Key results**: one row per scenario and build. These answer the questions:
-  - *Can we ingest at 10 / 100 / 1000 msg/s?* `accepted msg/s`, `IPC p99`; and get it to the cloud? `delivered msg/s`,
+  - *Can we ingest at 10 / 50 / 100 msg/s?* `accepted msg/s`, `IPC p99`; and get it to the cloud? `delivered msg/s`,
     `e2e p50`, `capacity msg/s`
   - *How much disk space without RAM?* the `spill0` scenarios: `db growth` during the outage, `disk B / payload B`,
     `db after drain` (SQLite does not give space back)

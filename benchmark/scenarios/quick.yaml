@@ -30,9 +30,10 @@ defaults:
   stall_s: 45
   cooldown_s: 20
 
-# every combination becomes a scenario named r<rate>-spill<threshold>
+# every combination becomes a scenario named r<rate>-spill<threshold>. AWS IoT Core accepts at most 100 publishes per
+# second per connection and the Nucleus throttles to that: 100 msg/s is the limit, a backlog then never drains.
 matrix:
-  rate: [10, 100, 1000]
+  rate: [10, 50, 100]
   spill_threshold_bytes: [0, 307200]
 
 # extra scenarios: the device loses power during the outage and restarts while still offline

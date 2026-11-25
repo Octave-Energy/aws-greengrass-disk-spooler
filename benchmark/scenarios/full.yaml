@@ -1,6 +1,6 @@
 # Full profile: run on demand (workflow_dispatch) to establish or check a baseline. About 6-12 minutes per scenario
 # and per plugin build. The outage is longer than the MQTT keep-alive and ping timeouts, so the Nucleus notices the
-# outage, drops the connection and reconnects afterwards; at 1000 msg/s the 60 MiB spool fills up.
+# outage, drops the connection and reconnects afterwards.
 
 nucleus_version: 2.18.3
 nucleus_configuration:
@@ -28,11 +28,11 @@ defaults:
   cooldown_s: 30
 
 matrix:
-  rate: [10, 100, 1000]
+  rate: [10, 50, 100]
   spill_threshold_bytes: [0, 307200]
 
 scenarios:
   - {rate: 100, spill_threshold_bytes: 0, power_loss: true}
   - {rate: 100, spill_threshold_bytes: 307200, power_loss: true}
-  - {rate: 1000, spill_threshold_bytes: 0, power_loss: true}
+  - {rate: 50, spill_threshold_bytes: 0, power_loss: true}
   - {rate: 100, spill_threshold_bytes: 0, outage_mode: reset}
