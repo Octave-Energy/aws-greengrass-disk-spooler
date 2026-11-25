@@ -31,7 +31,9 @@ KEY_COLUMNS = [
     ("disk_db_bytes_after_stop", "db after drain"),
     ("heap_backlog_bytes", "heap for backlog"),
     ("rss_peak_bytes", "RSS peak"),
+    ("recovery_backlog_msgs", "backlog at link up"),
     ("recovery_drain_s", "drain"),
+    ("recovery_drain_rate_msg_s", "drain msg/s"),
     ("cooldown_delivery_rate_msg_s", "capacity msg/s"),
     ("lost_msgs", "lost"),
     ("duplicate_msgs", "dup"),
@@ -233,8 +235,12 @@ def build(out: Path) -> Path:
               "Online: steady state with the link up. Outage: the internet is down and the spooler takes over. "
               "*e2e*: from creation of the batch to reception in the cloud. *db growth*: spooler.db (+journal) growth "
               "during the outage; *disk B / payload B*: that growth per spooled payload byte. *heap for backlog*: live "
-              "heap (after a full GC) at the end of the outage minus online. *drain*: time to deliver the outage "
-              "backlog while IBEMS keeps publishing. *capacity*: delivery rate when working through a backlog with no "
+              "heap (after a full GC) at the end of the outage minus online. *backlog at link up*: messages waiting "
+              "in the spooler when the internet came back. *drain*: time to deliver that backlog while IBEMS keeps "
+              "publishing; *drain msg/s*: backlog / drain time; messages are delivered in order, so new ones queue behind the "
+              "backlog and this is close to the delivery capacity. After an outage shorter than the MQTT keep-alive "
+              "the Nucleus has not noticed it and part of the backlog arrives at once from the stalled connection, so "
+              "small backlogs drain faster than the capacity. *capacity*: delivery rate when working through a backlog with no "
               "new messages. *lost*: accepted by the Nucleus but never delivered.", ""]
     lines += _key_table(results, labels)
     lines.append("")

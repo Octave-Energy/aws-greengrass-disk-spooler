@@ -65,6 +65,7 @@ METRICS: List[Metric] = [
     Metric("Recovery", "recovery_backlog_msgs", "backlog when the link came back", "count", None),
     Metric("Recovery", "recovery_first_delivery_s", "first delivery after the link came back", "s", "lower", 0.5, 1),
     Metric("Recovery", "recovery_drain_s", "time to deliver the outage backlog", "s", "lower", 0.15, 2),
+    Metric("Recovery", "recovery_drain_rate_msg_s", "outage backlog / drain time, msg/s", "rate", "higher", 0.1, 2),
     Metric("Recovery", "recovery_drained", "outage backlog fully delivered", "bool", "higher", 0, 0),
     Metric("Recovery", "backlog_recovery_end_msgs", "backlog at end of recovery", "count", "lower", 0.25, 20),
     Metric("Integrity", "lost_msgs", "accepted but never delivered (lost)", "count", "lower", 0, 0),

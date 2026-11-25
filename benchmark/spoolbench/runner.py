@@ -204,7 +204,7 @@ class ScenarioRun:
                 first_delivery_s = now - started
             if now < next_check:
                 continue
-            next_check = now + 1.0
+            next_check = now + 0.25  # drain times of small backlogs are about a second
             remaining = len(self.cloud.missing(bits, below))
             result["remaining_msgs"] = remaining
             if remaining == 0:
