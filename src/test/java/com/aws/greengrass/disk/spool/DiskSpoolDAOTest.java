@@ -261,6 +261,24 @@ class DiskSpoolDAOTest {
     }
 
     @ParameterizedTest
+    @MethodSource("allReadOperations")
+    void GIVEN_spooler_WHEN_corruption_detected_while_reading_results_THEN_spooler_recovers(
+            CrashableFunction<DiskSpoolDAO, Void, SQLException> operation) throws SQLException {
+        insertMessage(1L, "Hello".getBytes(StandardCharsets.UTF_8), QOS.AT_LEAST_ONCE);
+        // the query executes, then reading its results reaches a damaged page
+        SQLException corruptionException = new SQLException("DB is corrupt", "some state", 11);
+        dao.getConnection().addExceptionOnNext(corruptionException);
+
+        SQLException thrown = assertThrows(SQLException.class, () -> operation.apply(dao));
+        assertEquals(corruptionException, thrown);
+        // recovered: the database was recreated, so the message is gone, and it can be used again
+        assertEquals(Collections.emptyList(), dao.getAllSpoolMessageIds());
+        assertTrue(dao.getAllSpoolMessageMetadata().isEmpty());
+        insertMessage(2L, "Hello".getBytes(StandardCharsets.UTF_8), QOS.AT_LEAST_ONCE);
+        assertNotNull(dao.getSpoolMessageById(2L));
+    }
+
+    @ParameterizedTest
     @MethodSource("allSpoolerOperations")
     void GIVEN_spooler_WHEN_error_during_operation_THEN_exception_thrown(CrashableFunction<DiskSpoolDAO, Void, SQLException> operation, ExtensionContext context) {
         ignoreExceptionOfType(context, SQLTransientException.class);
@@ -321,6 +339,17 @@ class DiskSpoolDAOTest {
             default:
                 throw new IllegalArgumentException(corruption);
         }
+    }
+
+    public static Stream<Arguments> allReadOperations() {
+        return Stream.of(
+                Arguments.of(OPERATION_GET_ALL_SPOOL_MESSAGE_IDS),
+                Arguments.of(OPERATION_GET_ALL_SPOOL_MESSAGE_METADATA),
+                Arguments.of((CrashableFunction<DiskSpoolDAO, Void, Exception>) dao -> {
+                    dao.getSpoolMessageById(1L);
+                    return null;
+                })
+        );
     }
 
     public static Stream<Arguments> allSpoolerOperations() {

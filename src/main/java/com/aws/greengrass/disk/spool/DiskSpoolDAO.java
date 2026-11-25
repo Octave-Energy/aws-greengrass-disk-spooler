@@ -202,9 +202,7 @@ public class DiskSpoolDAO {
      * @throws SQLException if statement failed to execute, or when unable to read results
      */
     public synchronized Iterable<Long> getAllSpoolMessageIds() throws SQLException {
-        try (ResultSet rs = getAllSpoolMessageIds.execute()) {
-            return getAllSpoolMessageIds.mapResultToIds(rs);
-        }
+        return readResults(getAllSpoolMessageIds.execute(), getAllSpoolMessageIds::mapResultToIds);
     }
 
     /**
@@ -214,9 +212,7 @@ public class DiskSpoolDAO {
      * @throws SQLException if statement failed to execute, or when unable to read results
      */
     public synchronized List<SpoolMessageMetadata> getAllSpoolMessageMetadata() throws SQLException {
-        try (ResultSet rs = getAllSpoolMessageMetadata.execute()) {
-            return getAllSpoolMessageMetadata.mapResultToMetadata(rs);
-        }
+        return readResults(getAllSpoolMessageMetadata.execute(), getAllSpoolMessageMetadata::mapResultToMetadata);
     }
 
     /**
@@ -227,10 +223,49 @@ public class DiskSpoolDAO {
      * @throws SQLException if statement failed to execute, or when unable to read results
      */
     public synchronized SpoolMessage getSpoolMessageById(long id) throws SQLException {
-        try (ResultSet rs = getSpoolMessageById.executeWithParameters(id)) {
-            return getSpoolMessageById.mapResultToMessage(id, rs);
-        } catch (IOException e) {
-            throw new SQLException(e);
+        return readResults(getSpoolMessageById.executeWithParameters(id), rs -> {
+            try {
+                return getSpoolMessageById.mapResultToMessage(id, rs);
+            } catch (IOException e) {
+                throw new SQLException(e);
+            }
+        });
+    }
+
+    /**
+     * Read and close the results of a query, and recover if the database turns out to be corrupted while reading.
+     * A query can execute fine and still hit a damaged page later, when rs.next() reaches it: the corruption handling
+     * of {@link CachedStatement#execute} does not cover that, and without recovery every later read would fail on the
+     * same page. Recovery runs after the result set is closed.
+     *
+     * @param resultSet results of an executed query
+     * @param mapper    reads the results
+     * @param <T>       type of what is read
+     * @return what the mapper read
+     * @throws SQLException if unable to read the results
+     */
+    private <T> T readResults(ResultSet resultSet, CrashableFunction<ResultSet, T, SQLException> mapper)
+            throws SQLException {
+        try (ResultSet rs = resultSet) {
+            return mapper.apply(rs);
+        } catch (SQLException e) {
+            recoverIfCorrupted(e);
+            throw e;
+        }
+    }
+
+    /**
+     * Recover if the exception says the database is corrupted. A failing recovery is added to the exception as
+     * suppressed, so that the caller always gets the exception that triggered it.
+     */
+    private void recoverIfCorrupted(SQLException e) {
+        if (!isCorruption(e)) {
+            return;
+        }
+        try {
+            recoverFromCorruption();
+        } catch (SQLException recoveryFailure) {
+            e.addSuppressed(recoveryFailure);
         }
     }
 
@@ -589,9 +624,7 @@ public class DiskSpoolDAO {
             try {
                 return doExecute(statement);
             } catch (SQLException e) {
-                if (isCorruption(e)) {
-                    recoverFromCorruption();
-                }
+                recoverIfCorrupted(e);
                 throw e;
             } catch (Exception e) {
                 throw new SQLException(e);
