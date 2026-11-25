@@ -178,27 +178,32 @@ public class DiskSpoolTest {
                     Collections.singletonMap("diskSpillThresholdBytes", 10)));
             DiskSpoolDAOFake daoFake = new DiskSpoolDAOFake(currDir.resolve("spooler.db"));
             daoFake.initialize();
-            DiskSpool spool = new DiskSpool(config.getRoot(), daoFake);
+            // close the database at the end: Windows cannot delete the temporary directory of an open database
+            try {
+                DiskSpool spool = new DiskSpool(config.getRoot(), daoFake);
 
-            spool.add(1L, message(1L, QOS.AT_LEAST_ONCE)); // memory
-            spool.add(2L, message(2L, QOS.AT_MOST_ONCE));  // memory
-            spool.add(3L, message(3L, QOS.AT_LEAST_ONCE)); // disk
-            spool.removeMessageById(1L);                     // frees memory
-            spool.add(4L, message(4L, QOS.AT_LEAST_ONCE)); // memory again
+                spool.add(1L, message(1L, QOS.AT_LEAST_ONCE)); // memory
+                spool.add(2L, message(2L, QOS.AT_MOST_ONCE));  // memory
+                spool.add(3L, message(3L, QOS.AT_LEAST_ONCE)); // disk
+                spool.removeMessageById(1L);                     // frees memory
+                spool.add(4L, message(4L, QOS.AT_LEAST_ONCE)); // memory again
 
-            assertNull(daoFake.getSpoolMessageById(2L));
-            assertNotNull(daoFake.getSpoolMessageById(3L));
-            assertNull(daoFake.getSpoolMessageById(4L));
+                assertNull(daoFake.getSpoolMessageById(2L));
+                assertNotNull(daoFake.getSpoolMessageById(3L));
+                assertNull(daoFake.getSpoolMessageById(4L));
 
-            List<Long> ids = new ArrayList<>();
-            spool.getAllMessageIds().forEach(ids::add);
-            assertEquals(Arrays.asList(2L, 3L, 4L), ids);
+                List<Long> ids = new ArrayList<>();
+                spool.getAllMessageIds().forEach(ids::add);
+                assertEquals(Arrays.asList(2L, 3L, 4L), ids);
 
-            assertEquals(Arrays.asList(
-                    new SpoolMessageMetadata(2L, 5L, QOS.AT_MOST_ONCE),
-                    new SpoolMessageMetadata(3L, 5L, QOS.AT_LEAST_ONCE),
-                    new SpoolMessageMetadata(4L, 5L, QOS.AT_LEAST_ONCE)
-            ), spool.getAllMessageMetadata());
+                assertEquals(Arrays.asList(
+                        new SpoolMessageMetadata(2L, 5L, QOS.AT_MOST_ONCE),
+                        new SpoolMessageMetadata(3L, 5L, QOS.AT_LEAST_ONCE),
+                        new SpoolMessageMetadata(4L, 5L, QOS.AT_LEAST_ONCE)
+                ), spool.getAllMessageMetadata());
+            } finally {
+                daoFake.close();
+            }
         }
     }
 
