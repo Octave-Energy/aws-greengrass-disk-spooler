@@ -22,7 +22,7 @@ defaults:
   warmup_s: 10
   online_s: 60
   outage_s: 180
-  offline_after_restart_s: 30
+  offline_after_reboot_s: 30
   max_drain_s: 600
   stall_s: 90
   cooldown_s: 30
@@ -32,7 +32,7 @@ matrix:
   spill_threshold_bytes: [0, 307200]
 
 scenarios:
-  - {rate: 100, spill_threshold_bytes: 0, power_loss: true}
-  - {rate: 100, spill_threshold_bytes: 307200, power_loss: true}
-  - {rate: 50, spill_threshold_bytes: 0, power_loss: true}
+  - {rate: 100, spill_threshold_bytes: 0, device_crash: true}
+  - {rate: 100, spill_threshold_bytes: 307200, device_crash: true}
+  - {rate: 50, spill_threshold_bytes: 0, device_crash: true}
   - {rate: 100, spill_threshold_bytes: 0, outage_mode: reset}

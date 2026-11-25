@@ -25,7 +25,7 @@ defaults:
   warmup_s: 5
   online_s: 15
   outage_s: 30
-  offline_after_restart_s: 10
+  offline_after_reboot_s: 10
   max_drain_s: 180
   stall_s: 45
   cooldown_s: 20
@@ -36,7 +36,8 @@ matrix:
   rate: [10, 50, 100]
   spill_threshold_bytes: [0, 307200]
 
-# extra scenarios: the device loses power during the outage and restarts while still offline
+# extra scenarios: during the internet outage the whole device crashes (Nucleus, spooler and IBEMS killed at once,
+# no shutdown) and boots again while the internet is still down
 scenarios:
-  - {rate: 100, spill_threshold_bytes: 0, power_loss: true}
-  - {rate: 100, spill_threshold_bytes: 307200, power_loss: true}
+  - {rate: 100, spill_threshold_bytes: 0, device_crash: true}
+  - {rate: 100, spill_threshold_bytes: 307200, device_crash: true}

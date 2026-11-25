@@ -65,9 +65,14 @@ def class_histogram(java_home: Optional[str], pid: int) -> Dict[str, Any]:
     jcmd = str(Path(java_home) / "bin" / "jcmd") if java_home else "jcmd"
     started = time.monotonic()
     try:
-        out = subprocess.run([jcmd, str(pid), "GC.class_histogram"], capture_output=True, text=True, timeout=120).stdout
+        completed = subprocess.run([jcmd, str(pid), "GC.class_histogram"], capture_output=True, text=True, timeout=120)
     except (subprocess.TimeoutExpired, OSError) as e:
         return {"error": str(e)}
+    out = completed.stdout
+    if completed.returncode != 0 or "Total" not in out:
+        # no counts at all rather than zeros: a failed attach must not look like an empty heap
+        detail = (completed.stderr or out).strip().splitlines()
+        return {"error": f"jcmd exited with {completed.returncode}: {detail[-1] if detail else ''}"}
     result: Dict[str, Any] = {"duration_s": round(time.monotonic() - started, 3)}
     for line in out.splitlines():
         fields = line.split()

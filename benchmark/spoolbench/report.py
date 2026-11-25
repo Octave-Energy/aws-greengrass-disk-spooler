@@ -12,12 +12,12 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .compare import METRICS_BY_KEY, fmt, render
+from .compare import METRICS_BY_KEY, fmt, render, scenario_sort_key
 
 SCHEMA = "spoolbench-report/1"
 # reference categorical palette (validated for colour vision deficiencies), assigned in fixed order to the builds
 SERIES_COLOURS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
-OUTAGE_PHASES = ("outage", "power_loss", "outage_after_restart")
+OUTAGE_PHASES = ("outage", "device_crash", "offline_after_reboot")
 
 # columns of the key results table: (summary key, short header)
 KEY_COLUMNS = [
@@ -48,6 +48,8 @@ def _load_results(out: Path) -> List[Dict[str, Any]]:
         result["directory"] = str(path.parent.relative_to(out))
         result.get("events", {}).pop("lost_seqs", None)
         results.append(result)
+    # in the order of the workload (10, 50, 100 msg/s, ...) rather than alphabetically
+    results.sort(key=lambda r: (scenario_sort_key(r["scenario"], r["scenario_params"]), r["label"], r.get("repeat", 1)))
     return results
 
 
@@ -82,7 +84,7 @@ def _chart(out: Path, scenario: str, runs: Dict[str, Path], colours: Dict[str, s
               ("heap", "JVM heap used (MiB)"), ("rss", "Nucleus RSS (MiB)")]
     fig, axes = plt.subplots(len(panels), 1, figsize=(10, 12), sharex=True)
     outage_span = None
-    has_power_loss = False
+    has_crash = False
     for label, directory in runs.items():
         rows = _read_timeseries(directory / "timeseries.csv")
         if not rows:
@@ -93,11 +95,11 @@ def _chart(out: Path, scenario: str, runs: Dict[str, Path], colours: Dict[str, s
             outage_span = (0.0, recovery - start)
         t = [r["t"] - start for r in rows]
         colour = colours[label]
-        power_loss = next((r["t"] - start for r in rows if r["phase"] == "power_loss"), None)
-        if power_loss is not None:
-            has_power_loss = True
+        crash = next((r["t"] - start for r in rows if r["phase"] == "device_crash"), None)
+        if crash is not None:
+            has_crash = True
             for ax in axes:
-                ax.axvline(power_loss, color=colour, linewidth=1, linestyle="--", alpha=0.7)
+                ax.axvline(crash, color=colour, linewidth=1, linestyle="--", alpha=0.7)
 
         def series(key, scale=1.0):
             return [r[key] / scale if r.get(key) is not None else float("nan") for r in rows]
@@ -133,7 +135,7 @@ def _chart(out: Path, scenario: str, runs: Dict[str, Path], colours: Dict[str, s
     axes[0].legend(fontsize=8, ncol=2, frameon=False, loc="upper right")
     axes[1].legend(fontsize=8, frameon=False, loc="upper right")
     if outage_span:
-        axes[0].annotate("outage (dashed line: power loss)" if has_power_loss else "outage",
+        axes[0].annotate("internet outage (dashed line: device crash)" if has_crash else "internet outage",
                          xy=(outage_span[0], 1), xycoords=("data", "axes fraction"), fontsize=8, color="#52514e",
                          va="bottom")
     axes[-1].set_xlabel("seconds since the start of the outage", fontsize=9, color="#52514e")
@@ -248,8 +250,8 @@ def build(out: Path) -> Path:
         lines += [f"### {scenario}", "",
                   f"{params['rate']:g} msg/s, diskSpillThresholdBytes {params['spill_threshold_bytes']}, online "
                   f"{params['online_s']:g} s, outage {params['outage_s']:g} s ({params['outage_mode']})"
-                  + (f", power loss and {params['offline_after_restart_s']:g} s offline after the restart"
-                     if params.get("power_loss") else "") + ".", ""]
+                  + (f", device crash during the outage and {params['offline_after_reboot_s']:g} s offline after the reboot"
+                     if params.get("device_crash") else "") + ".", ""]
         if chart:
             lines += [f"![{scenario}](charts/{chart.name})", ""]
         for r in (r for r in results if r["scenario"] == scenario):

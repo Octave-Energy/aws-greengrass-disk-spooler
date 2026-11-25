@@ -180,7 +180,7 @@ class Nucleus:
             args += ["--init-config", str(self.init_config)]
         self.log_dir.mkdir(parents=True, exist_ok=True)
         stdout = open(self.log_dir / f"nucleus-stdout-{self.starts}.log", "wb")
-        # own session, so that a "power loss" can kill the Nucleus and every component it started at once
+        # own session, so that a "device crash" can kill the Nucleus and every component it started at once
         self.process = subprocess.Popen(args, stdout=stdout, stderr=subprocess.STDOUT, start_new_session=True,
                                         cwd=self.root)
         return self.process.pid
@@ -221,7 +221,7 @@ class Nucleus:
         self._kill_group()
 
     def kill(self) -> None:
-        """Power loss: the Nucleus and all its components die at once, without any shutdown."""
+        """Device crash: the Nucleus and all its components die at once, without any shutdown (SIGKILL)."""
         if self.process is None:
             return
         try:  # components may run in their own process group: kill every descendant too

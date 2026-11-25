@@ -9,7 +9,7 @@ work directory:
 - stats.jsonl (appended every second): published, accepted, rejected, IPC latency histogram, lag
 - snapshot-<n>.json (written when "snapshot" changes, after in-flight publishes completed): exact counters
 - accepted.bin / state.json: which sequence numbers the Nucleus accepted, and the next sequence number, so that the
-  numbering survives a restart (e.g. after a power loss)
+  numbering survives a restart (e.g. after a device crash)
 """
 
 import argparse
@@ -148,10 +148,13 @@ class Simulator:
             self._take_snapshot(snapshot)
 
     def _take_snapshot(self, snapshot: int) -> None:
-        """Waits for in-flight publishes, then persists exact counters and the accepted sequence numbers."""
-        deadline = time.monotonic() + 30
+        """Waits for in-flight publishes, then persists exact counters and the accepted sequence numbers.
+
+        Never writes a snapshot with publishes still in flight: one accepted later would be missing from the accepted
+        set. If a publish never completes, the runner's snapshot timeout fails the scenario instead.
+        """
         with self.lock:
-            while self.outstanding > 0 and time.monotonic() < deadline:
+            while self.outstanding > 0:
                 self.lock.wait(0.05)
             used = (self.next_seq >> 3) + 1
             bits = bytes(self.accepted_bits[:used])

@@ -41,22 +41,28 @@ A scenario is a publish rate and a `diskSpillThresholdBytes` value, run through 
 1. **startup**: the Nucleus starts and sets up the persistent spooler (the run fails if it falls back to memory)
 2. **connect**, **warmup**: until messages reach the cloud, then a few seconds of steady state
 3. **online**: steady state, link up
-4. **outage**: the link is black-holed (packets vanish, as on a dead uplink: the Nucleus only notices through its MQTT
-   keep-alive) or reset; the simulator keeps publishing and the spooler takes over: first memory, up to
+4. **outage**: the internet (the link between the device and AWS IoT Core) breaks: black-holed (packets vanish, as
+   on a dead uplink: the Nucleus only notices through its MQTT keep-alive) or reset (connections closed). The device
+   itself keeps running: IBEMS keeps publishing and the spooler takes over, first memory, up to
    `diskSpillThresholdBytes`, then disk
-5. **power loss** (optional): the Nucleus and its components are SIGKILLed during the outage and restarted while the
-   link is still down; whatever was only in memory is lost (note: a process kill, the operating system keeps its
-   page cache, so this does not test fsync durability)
-6. **recovery**: the link is back; the simulator keeps publishing; until the backlog of the outage is delivered
+5. **device crash** (optional, `device_crash: true`, scenarios `…-devicecrash`): during the internet outage the
+   whole device goes down. The Nucleus, the spooler and IBEMS are killed at once (SIGKILL: no shutdown, nothing is
+   flushed), whatever was only in memory is lost, and the connections the device had open die with it. The device
+   then boots again (**offline_after_reboot**): the Nucleus starts, the spooler reopens its database and IBEMS
+   publishes again, while the internet is still down.
+   This is a crash of the processes, not a cut of the power supply: the operating system keeps running, so data
+   the spooler wrote but the operating system had not yet flushed to storage survives here, where a real power cut
+   could lose it. It shows what the spooler keeps across a crash or reboot, not whether its writes are durable.
+6. **recovery**: the internet is back; the simulator keeps publishing; until the backlog of the outage is delivered
 7. **cooldown**: the simulator stops; until every accepted message is delivered, or nothing more arrives
    (then the rest is lost); then a graceful stop and the final database size
 
 Profiles in `scenarios/`:
 
 - `quick.yaml` (every pull request): 10, 50 and 100 msg/s × spill threshold 0 (disk only, no RAM) and 300 KiB
-  (production), 15 s online, 30 s outage, plus two power-loss scenarios.
+  (production), 15 s online, 30 s outage, plus two device-crash scenarios.
 - `full.yaml` (on demand): same matrix, 60 s online, 180 s outage (longer than the MQTT keep-alive, so the Nucleus
-  drops the connection and reconnects), more power-loss scenarios, a reset.
+  drops the connection and reconnects), more device-crash scenarios, a reset.
 
 The rates stop at 100 msg/s: AWS IoT Core accepts at most 100 publish requests per second per MQTT connection
 (and 512 KB/s), and the Nucleus throttles its publishes to stay within that. The cloud-side delivery rate is

@@ -33,6 +33,9 @@ def cmd_run(args) -> int:
 
     protos.generate()
     profile, settings, scenarios = config.load(args.profile)
+    # position of each scenario in the whole profile: CI runs one scenario per job (--only), and the build order must
+    # still alternate between scenarios
+    profile_index = {s.name: i for i, s in enumerate(scenarios)}
     if args.java_home:
         settings.java_home = args.java_home
     settings.java_home = settings.java_home or os.environ.get("JAVA_HOME")
@@ -68,9 +71,9 @@ def cmd_run(args) -> int:
     labels = list(jars)
     failures = 0
     for repeat in range(args.repeat):
-        for index, scenario in enumerate(scenarios):
+        for scenario in scenarios:
             # alternate the order of the builds, so that drift of the machine does not favour one of them
-            order = labels if (repeat + index) % 2 == 0 else list(reversed(labels))
+            order = labels if (repeat + profile_index[scenario.name]) % 2 == 0 else list(reversed(labels))
             for label in order:
                 directory = out / label / (scenario.name if args.repeat == 1 else f"{scenario.name}-rep{repeat + 1}")
                 print(f"=== {label}: {scenario.name} (repeat {repeat + 1}/{args.repeat})", flush=True)

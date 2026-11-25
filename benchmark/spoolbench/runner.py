@@ -11,8 +11,9 @@ Phases (each one is recorded in the time series and summarised separately):
 4. online      steady state: ingest rate, IPC latency, CPU (checkpoint: live heap with an empty spool)
 5. outage      the internet breaks (proxy black-holes the connection); IBEMS keeps publishing, the spooler
                takes over: first memory (up to diskSpillThresholdBytes), then disk
-6. power_loss  optional: the device dies during the outage (Nucleus and components SIGKILLed) and restarts
-7. outage_after_restart   optional: still offline after the restart
+6. device_crash          optional: during the internet outage the whole device goes down: the Nucleus, the spooler
+                        and IBEMS are SIGKILLed at once, without any shutdown, and the device boots again
+7. offline_after_reboot  optional: the internet is still down after the reboot; IBEMS publishes again
                (checkpoint at the end of the outage: live heap and spooled messages in memory, db size)
 8. recovery    the link is back; IBEMS keeps publishing; until every message accepted before the link came back
                reached the cloud (drained), progress stalls, or max_drain_s
@@ -305,17 +306,22 @@ class ScenarioRun:
         self._set_phase("outage")
         self.proxy.reset() if sc.outage_mode == "reset" else self.proxy.blackhole()
         self._sleep_phase(sc.outage_s)
-        if sc.power_loss:
-            before = self._snapshot(rate=0)  # IBEMS stops with the device: the exact set accepted before the crash
-            self.events["accepted_before_power_loss"] = before["accepted"]
-            self._set_phase("power_loss")
+        if sc.device_crash:
+            before = self._snapshot(rate=0)  # IBEMS dies with the device: the exact set accepted before the crash
+            self.events["accepted_before_crash"] = before["accepted"]
+            self._set_phase("device_crash")
             self.probe.detach()
             self.nucleus.kill()
-            self.events["restart_s"] = self._start_nucleus()
-            self._log(f"restarted after power loss, spooler ready after {self.events['restart_s']}s")
-            self._set_phase("outage_after_restart")
+            # what the dead device had sent but the link had not carried yet dies with it: drop the connections
+            # (and the bytes the proxy holds for them), then keep the link down
+            self.proxy.reset()
+            if sc.outage_mode != "reset":
+                self.proxy.blackhole()
+            self.events["reboot_s"] = self._start_nucleus()
+            self._log(f"rebooted after the crash, spooler ready after {self.events['reboot_s']}s")
+            self._set_phase("offline_after_reboot")
             self._control(rate=sc.rate)
-            self._sleep_phase(sc.offline_after_restart_s)
+            self._sleep_phase(sc.offline_after_reboot_s)
         self._checkpoint("outage_end")
         at_link_up = self._snapshot(rate=sc.rate)
 
@@ -351,11 +357,11 @@ class ScenarioRun:
                     component.stop()
                 except Exception:  # noqa: BLE001
                     traceback.print_exc()
+        (self.out_dir / "logs").mkdir(parents=True, exist_ok=True)
         if self.broker and (self.broker.workdir / "mosquitto.log").exists():
             shutil.copyfile(self.broker.workdir / "mosquitto.log", self.out_dir / "logs" / "mosquitto.log")
         for name in ("stats.jsonl",):
             if (self.simdir / name).exists():
-                (self.out_dir / "logs").mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(self.simdir / name, self.out_dir / "logs" / f"simulator-{name}")
         if not self.keep_workdir:
             shutil.rmtree(self.work, ignore_errors=True)
@@ -426,7 +432,7 @@ class ScenarioRun:
         """The headline metrics compared between runs (see compare.METRICS)."""
         sc = self.scenario
         online = phases.get("online", {})
-        outage_phases = [phases[p] for p in ("outage", "outage_after_restart") if p in phases]
+        outage_phases = [phases[p] for p in ("outage", "offline_after_reboot") if p in phases]
         checkpoints = self.checkpoints
         recovery = self.events.get("recovery", {})
         cooldown = self.events.get("cooldown", {})
@@ -480,14 +486,14 @@ class ScenarioRun:
             # memory
             "heap_live_online_bytes": cp_online.get("live_heap_bytes"),
             "heap_live_outage_end_bytes": cp_outage.get("live_heap_bytes"),
-            # not after a power loss: the checkpoints are then of two different JVMs
-            "heap_backlog_bytes": None if sc.power_loss else sub(cp_outage.get("live_heap_bytes"),
+            # not after a device crash: the checkpoints are then of two different JVMs
+            "heap_backlog_bytes": None if sc.device_crash else sub(cp_outage.get("live_heap_bytes"),
                                                                  cp_online.get("live_heap_bytes")),
             "heap_live_drained_bytes": cp_drained.get("live_heap_bytes"),
             "spool_messages_in_heap_outage_end": cp_outage.get("spool_message_instances"),
             "heap_used_peak_bytes": max(rows_heap) if rows_heap else None,
             "rss_peak_bytes": max(rows_rss) if rows_rss else None,
-            "rss_growth_outage_bytes": None if sc.power_loss else sub(cp_outage.get("rss_bytes"),
+            "rss_growth_outage_bytes": None if sc.device_crash else sub(cp_outage.get("rss_bytes"),
                                                                       cp_online.get("rss_bytes")),
             # recovery
             "recovery_backlog_msgs": recovery.get("backlog_msgs"),
@@ -515,7 +521,7 @@ class ScenarioRun:
             "accepted_msgs": final.get("accepted"),
             # robustness
             "startup_s": self.events.get("startup_s"),
-            "restart_s": self.events.get("restart_s"),
+            "reboot_s": self.events.get("reboot_s"),
             "log_errors": log.get("error"),
             "log_warnings": log.get("warn"),
             **{f"log_{key}": value for key, value in patterns.items()},

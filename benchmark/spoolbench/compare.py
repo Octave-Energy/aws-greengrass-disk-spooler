@@ -74,7 +74,7 @@ METRICS: List[Metric] = [
     Metric("Integrity", "rejected_msgs", "publishes rejected (total)", "count", "lower", 0, 0),
     Metric("Integrity", "out_of_order_msgs", "delivered out of order", "count", None),
     Metric("Robustness", "startup_s", "Nucleus start until spooler ready", "s", "lower", 0.3, 1),
-    Metric("Robustness", "restart_s", "restart after power loss until spooler ready", "s", "lower", 0.3, 1),
+    Metric("Robustness", "reboot_s", "start after the device crash until spooler ready", "s", "lower", 0.3, 1),
     Metric("Robustness", "log_errors", "ERROR log events", "count", "lower", 0, 0),
     Metric("Robustness", "log_warnings", "WARN log events", "count", "lower", 0.5, 5),
     Metric("Robustness", "log_disk_add_failed_fallback_to_memory", "'Disk Spooler failed to add Message' events",
@@ -147,20 +147,43 @@ def aggregate(results: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
                 summary[key] = all(values)
             else:
                 summary[key] = sum(values) / len(values)
+        params = dict(runs[0].get("scenario_params") or {})
+        params.pop("name", None)
         aggregated[scenario] = {"summary": summary, "runs": len(runs), "failed": len(runs) - len(ok),
-                                "errors": [r.get("error") for r in runs if r.get("status") != "ok"]}
+                                "errors": [r.get("error") for r in runs if r.get("status") != "ok"],
+                                "params": params}
     return aggregated
+
+
+def scenario_sort_key(name: str, params: Optional[Dict[str, Any]]) -> Tuple:
+    """Rate first (10, 50, 100 msg/s), then plain outage before crash and reset variants, then spill threshold."""
+    params = params or {}
+    crash = bool(params.get("device_crash") or params.get("power_loss"))
+    reset = params.get("outage_mode", "blackhole") != "blackhole"
+    return (float(params.get("rate", 0)), crash, reset, params.get("spill_threshold_bytes", 0), name)
 
 
 def _results_of(report: Dict[str, Any], label: str) -> List[Dict[str, Any]]:
     return [r for r in report["results"] if r["label"] == label]
 
 
+# profile settings that change the workload or the system under test: reports that differ in any of them do not
+# measure the same thing
+PROFILE_CONDITIONS = ("nucleus_version", "nucleus_configuration", "plugin_configuration", "jvm_options", "seed",
+                      "max_outstanding", "payload_profile")
+
+
+def _differences(base: Dict[str, Any], cand: Dict[str, Any], keys) -> List[str]:
+    return [f"`{key}` {json.dumps(base.get(key))} ≠ {json.dumps(cand.get(key))}" for key in keys
+            if base.get(key) != cand.get(key)]
+
+
 def render(baseline_report: Dict[str, Any], baseline_label: str, candidate_report: Dict[str, Any],
            candidate_label: str) -> Tuple[str, int]:
     base = aggregate(_results_of(baseline_report, baseline_label))
     cand = aggregate(_results_of(candidate_report, candidate_label))
-    scenarios = [s for s in base if s in cand] + [s for s in cand if s not in base]
+    scenarios = sorted(set(base) | set(cand), key=lambda s: scenario_sort_key(
+        s, (base.get(s) or cand.get(s) or {}).get("params")))
     lines = [f"## Comparison: `{candidate_label}` vs. baseline `{baseline_label}`", ""]
     b_env = baseline_report.get("environment", {})
     c_env = candidate_report.get("environment", {})
@@ -168,21 +191,36 @@ def render(baseline_report: Dict[str, Any], baseline_label: str, candidate_repor
                                                                                            c_env.get("cpus")):
         lines += [f"> ⚠️ The reports come from different machines ({b_env.get('cpu')} x{b_env.get('cpus')} vs. "
                   f"{c_env.get('cpu')} x{c_env.get('cpus')}): differences may be due to the hardware.", ""]
+    profile_differences = _differences(baseline_report.get("profile") or {}, candidate_report.get("profile") or {},
+                                       PROFILE_CONDITIONS)
+    if profile_differences:
+        lines += ["> ⛔ The reports were run with different settings, so they measure different things and no metric "
+                  "is judged better or worse: " + "; ".join(profile_differences) + ".", ""]
     lines += ["Changes within the noise tolerance of a metric are shown as ≈.", "",
               "| scenario | 🟢 better | 🔴 worse | worse metrics |", "|---|---:|---:|---|"]
     details = []
     total_worse = 0
     for scenario in scenarios:
         b, c = base.get(scenario), cand.get(scenario)
-        if not b or not c or not b["summary"] or not c["summary"]:
-            lines.append(f"| {scenario} | – | – | missing or failed run |")
+        problem = ("no baseline run" if not b else "no candidate run" if not c
+                   else "baseline run failed" if not b["summary"] else "candidate run failed" if not c["summary"]
+                   else None)
+        if problem:
+            lines.append(f"| {scenario} | – | – | ⚠️ {problem} |")
             continue
+        # parameters both runs know (a parameter added to a later version of the benchmark keeps its old default)
+        conditions = _differences(b["params"], c["params"], sorted(set(b["params"]) & set(c["params"])))
+        comparable = not conditions and not profile_differences
+        if conditions:
+            lines.append(f"| {scenario} | – | – | ⛔ not comparable, different conditions: {'; '.join(conditions)} |")
         rows, better, worse = [], 0, []
         for metric in METRICS:
             bv, cv = b["summary"].get(metric.key), c["summary"].get(metric.key)
             if bv is None and cv is None:
                 continue
             v, relative = verdict(metric, bv, cv)
+            if not comparable and v in ("better", "worse", "same"):
+                v = "n/a"
             better += v == "better"
             if v == "worse":
                 worse.append(metric.title)
@@ -190,7 +228,8 @@ def render(baseline_report: Dict[str, Any], baseline_label: str, candidate_repor
             rows.append(f"| {metric.group} | {metric.title} | {fmt(bv, metric.unit)} | {fmt(cv, metric.unit)} | "
                         f"{change} | {SYMBOL[v]} |")
         total_worse += len(worse)
-        lines.append(f"| {scenario} | {better} | {len(worse)} | {', '.join(worse)} |")
+        if not conditions:
+            lines.append(f"| {scenario} | {better} | {len(worse)} | {', '.join(worse)} |")
         details += [f"<details><summary><b>{scenario}</b>: {better} better, {len(worse)} worse</summary>", "",
                     f"| | metric | {baseline_label} | {candidate_label} | change | |", "|---|---|---:|---:|---:|---|",
                     *rows, "", "</details>", ""]

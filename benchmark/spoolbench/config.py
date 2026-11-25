@@ -16,8 +16,8 @@ class Scenario:
     online_s: float = 30
     outage_s: float = 60
     outage_mode: str = "blackhole"  # or "reset"
-    power_loss: bool = False
-    offline_after_restart_s: float = 15
+    device_crash: bool = False
+    offline_after_reboot_s: float = 15
     warmup_s: float = 5
     max_drain_s: float = 300
     stall_s: float = 60
@@ -44,8 +44,8 @@ def scenario_name(params: Dict[str, Any]) -> str:
     spill = params["spill_threshold_bytes"]
     spill_text = f"{spill // 1024}k" if spill and spill % 1024 == 0 else str(spill)
     name = f"r{params['rate']:g}-spill{spill_text}"
-    if params.get("power_loss"):
-        name += "-powerloss"
+    if params.get("device_crash"):
+        name += "-devicecrash"
     if params.get("outage_mode", "blackhole") != "blackhole":
         name += f"-{params['outage_mode']}"
     return name
