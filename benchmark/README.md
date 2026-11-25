@@ -45,7 +45,8 @@ Every scenario simulates an **internet outage** while IBEMS keeps publishing. A 
 | `…-outage-reset` | **internet outage** where the connections are reset (closed at once) instead of black-holed |
 
 `<rate>` is the IBEMS publish rate in messages per second, `<threshold>` the plugin's `diskSpillThresholdBytes`
-(`spill0`: everything goes to disk, no RAM; `spill300k`: production, the first 300 KiB of backlog stays in RAM).
+(`spill0`: everything goes to disk, no RAM; `spill300k`: production, the first 300 KiB of backlog stays in RAM; see
+[RAM, disk and message order](#ram-disk-and-message-order)).
 
 Each scenario runs through these phases:
 
@@ -77,11 +78,39 @@ Profiles in `scenarios/`:
 
 The rates stop at 100 msg/s: AWS IoT Core accepts at most 100 publish requests per second per MQTT connection
 (and 512 KB/s), and the Nucleus throttles its publishes to stay within that. The cloud-side delivery rate is
-therefore capped around 100 msg/s, and a backlog drains at about 100 msg/s minus the rate IBEMS keeps publishing
-at: at 100 msg/s it does not drain at all.
+therefore capped around 100 msg/s. Messages go out in order, so the backlog of an outage is delivered at about that
+rate, but new messages keep queueing behind it: the number of messages waiting only shrinks by the capacity minus
+the rate IBEMS keeps publishing at, and at 100 msg/s it does not shrink at all.
 
 The Nucleus and spooler settings are those of production (`octave-ibems/deployment/generate_greengrass_deployment.py`):
 Nucleus 2.18.3, `mqtt.spooler.storageType: Disk`, `maxSizeInBytes: 62914560`, JSON logs at INFO.
+
+### RAM, disk and message order
+
+`diskSpillThresholdBytes` is an amount of **payload bytes**, not of messages: `spill300k` is 307200 bytes (300 KiB),
+about 150 IBEMS messages at the mean payload of 2 KiB. The plugin (`DiskSpool.add`) keeps a new message in RAM while
+the payload in RAM is below the threshold, and writes it to `spooler.db` otherwise; `spill0` writes every message to
+disk. Messages in RAM are never moved to disk later: they stay in RAM until they are delivered. With the link up the
+backlog is small and nearly every message stays in RAM, which is what the threshold is for: fewer writes to storage.
+
+Example, a 1 minute outage at 10 msg/s with `spill300k`: about 600 messages (1.2 MB). The first ~15 s (~150
+messages) fill the 300 KiB in RAM, the other ~45 s (~450 messages) go to disk, and the first 150 stay in RAM.
+
+**Order.** The plugin only stores messages; it does not choose which one is sent next. The Nucleus keeps its own
+queue of message IDs (`Spool.queueOfMessageId`) in publish order, takes the oldest and asks the plugin for it
+(`DiskSpool.getMessageById`: RAM first, then disk). When the internet is back it therefore sends the ~150 RAM
+messages of the start of the outage, then the ~450 from disk, then the messages published since. Every delivered
+message is removed from where it is stored, which frees RAM, so messages published during the drain go to RAM again
+while older ones are still on disk: storage gets mixed, delivery stays first in, first out. The cloud subscriber
+checks the sequence numbers (`out_of_order_msgs`): 0 in every scenario, `spill0` and `spill300k` alike.
+
+**Device crash.** What is in RAM is lost, and with `spill300k` those are the oldest messages, from the start of the
+outage: the disk messages survive and are delivered in order after the reboot, with a hole at the start of the
+outage (`lost`, about a hundred messages in the `…-devicecrash` scenarios at 100 msg/s). With `spill0` nothing is
+lost, but a few messages may arrive twice (`dup`): delivered to the cloud, but not yet removed from the spooler when
+the device died. QoS 1 is at-least-once, so they are sent again after the reboot.
+
+The choice is between fewer writes to storage (`spill300k`) and losing nothing in a crash (`spill0`).
 
 ## The report
 
