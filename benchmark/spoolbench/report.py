@@ -3,6 +3,7 @@ Builds the report of a results directory (<out>/<label>/<scenario>/result.json +
 
 - report.json   machine-readable, the input of `compare` (schema "spoolbench-report/1")
 - report.md     key results per scenario and build, comparison of the first two builds, phase details
+- summary.md    report.md with Mermaid charts instead of images, for the GitHub job summary
 - charts/*.png  time series per scenario, every build overlaid, aligned on the start of the outage
 """
 
@@ -151,6 +152,65 @@ def _chart(out: Path, scenario: str, runs: Dict[str, Path], colours: Dict[str, s
     return path
 
 
+# charts of the job summary (GitHub renders Mermaid, not images there): (title, column, scale, per second)
+MERMAID_CHARTS = [
+    ("backlog (messages)", "backlog", 1.0, False),
+    ("delivered to the cloud (msg/s)", "delivered", 1.0, True),
+    ("spooler.db (MiB)", "spool_db_bytes", 1024 * 1024, False),
+    ("JVM heap used (MiB)", "heap_used_bytes", 1024 * 1024, False),
+]
+MERMAID_POINTS = 60
+
+
+def _mermaid_charts(scenario: str, runs: Dict[str, Path], colours: Dict[str, str]) -> List[str]:
+    """The time series as Mermaid line charts, every build resampled onto one time grid (outage starts at 0)."""
+    series: Dict[str, List[Dict[str, Any]]] = {}
+    for label, directory in runs.items():
+        rows = _read_timeseries(directory / "timeseries.csv")
+        if rows:
+            start = next((r["t"] for r in rows if r["phase"] == "outage"), rows[0]["t"])
+            series[label] = [{**r, "t": r["t"] - start} for r in rows]
+    if not series:
+        return []
+    t_min = min(rows[0]["t"] for rows in series.values())
+    t_max = max(rows[-1]["t"] for rows in series.values())
+    step = max((t_max - t_min) / (MERMAID_POINTS - 1), 1.0)
+    grid = [t_min + i * step for i in range(int((t_max - t_min) / step) + 1)]
+
+    def sample(rows, key, scale, per_second):
+        values, j = [], 0
+        for t in grid:
+            while j + 1 < len(rows) and rows[j + 1]["t"] <= t:
+                j += 1
+            cur = rows[j]
+            value = cur.get(key)
+            if per_second:
+                prev = next((r for r in reversed(rows[:j]) if r["t"] <= cur["t"] - step), rows[0])
+                dt = cur["t"] - prev["t"]
+                value = (cur[key] - prev[key]) / dt if dt > 0 and value is not None and prev.get(key) is not None \
+                    else 0.0
+            values.append(round((value or 0.0) / scale, 2))
+        return values
+
+    labels = list(series)
+    legend = ", ".join(f"{label} {'blue' if i == 0 else 'orange' if i == 1 else f'#{i + 1}'}"
+                       for i, label in enumerate(labels))
+    lines = [f"Lines: {legend}. Time in seconds since the internet outage started.", ""]
+    palette = ", ".join(colours[label] for label in labels)
+    for title, key, scale, per_second in MERMAID_CHARTS:
+        data = {label: sample(rows, key, scale, per_second) for label, rows in series.items()}
+        if not any(any(v) for v in data.values()):
+            continue
+        lines += ["```mermaid", "---", "config:", "  xyChart:", "    width: 700", "    height: 260",
+                  "  themeVariables:", "    xyChart:", f'      plotColorPalette: "{palette}"', "---", "xychart-beta",
+                  f'  title "{scenario}: {title}"',
+                  f"  x-axis \"seconds since the outage started\" {round(grid[0])} --> {round(grid[-1])}",
+                  f'  y-axis "{title}"']
+        lines += [f"  line [{', '.join(f'{v:g}' for v in data[label])}]" for label in labels]
+        lines += ["```", ""]
+    return lines
+
+
 def _key_table(results: List[Dict[str, Any]], labels: List[str]) -> List[str]:
     lines = ["| scenario | build | " + " | ".join(h for _, h in KEY_COLUMNS) + " |",
              "|---|---|" + "---:|" * len(KEY_COLUMNS)]
@@ -250,6 +310,7 @@ def build(out: Path) -> Path:
         lines += [text, ""]
 
     lines += ["## Scenarios", ""]
+    summary_charts: Dict[int, List[str]] = {}  # line of a chart image in report.md -> its Mermaid version
     scenarios: List[str] = []
     for r in results:
         if r["scenario"] not in scenarios:
@@ -265,6 +326,7 @@ def build(out: Path) -> Path:
                      if params.get("device_crash") else "") + ".", ""]
         if chart:
             lines += [f"![{scenario}](charts/{chart.name})", ""]
+            summary_charts[len(lines) - 2] = _mermaid_charts(scenario, runs, colours)
         for r in (r for r in results if r["scenario"] == scenario):
             title = f"{r['label']}" + (f" (repeat {r.get('repeat')})" if r.get("repeat", 1) != 1 else "")
             lines += [f"<details><summary>{title}: phases, memory checkpoints, log events</summary>", ""]
@@ -278,5 +340,10 @@ def build(out: Path) -> Path:
                 lines.append("")
             lines += ["</details>", ""]
     (out / "report.md").write_text("\n".join(lines))
+    # the same report for the GitHub job summary, which shows Mermaid charts but no images
+    summary: List[str] = []
+    for index, line in enumerate(lines):
+        summary.extend(summary_charts.get(index, [line]))
+    (out / "summary.md").write_text("\n".join(summary))
     print(f"report: {out / 'report.md'}")
     return out / "report.md"

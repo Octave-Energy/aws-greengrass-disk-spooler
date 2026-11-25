@@ -85,7 +85,8 @@ Nucleus 2.18.3, `mqtt.spooler.storageType: Disk`, `maxSizeInBytes: 62914560`, JS
 
 ## The report
 
-`report.md` (also the job summary in GitHub Actions), `report.json` and `charts/*.png`:
+`report.md`, `report.json` and `charts/*.png`; `summary.md` is the same report with Mermaid line charts instead of the
+PNGs, shown as the job summary in GitHub Actions (which renders Mermaid but no images):
 
 - **Key results**: one row per scenario and build. These answer the questions:
   - *Can we ingest at 10 / 50 / 100 msg/s?* `accepted msg/s`, `IPC p99`; and get it to the cloud? `delivered msg/s`,

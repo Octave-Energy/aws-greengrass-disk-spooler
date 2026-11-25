@@ -201,13 +201,14 @@ jobs:
         run: |
           pip install PyYAML==6.0.4 matplotlib==3.11.2
           python -m spoolbench report results
-          # the job summary cannot show the charts (they are in the artifact)
-          grep -v '^!\[' results/report.md >> "$GITHUB_STEP_SUMMARY"
+          # the job summary shows Mermaid charts instead of the PNGs (which are in the artifact)
+          cat results/summary.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: spooler-benchmark-report
           path: |
             benchmark/results/report.json
             benchmark/results/report.md
+            benchmark/results/summary.md
             benchmark/results/charts
           retention-days: 90
