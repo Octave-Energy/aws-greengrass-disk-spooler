@@ -13,10 +13,15 @@ import com.aws.greengrass.logging.impl.LogManager;
 import com.aws.greengrass.mqttclient.spool.CloudMessageSpool;
 import com.aws.greengrass.mqttclient.spool.InMemorySpool;
 import com.aws.greengrass.mqttclient.spool.SpoolMessage;
+import com.aws.greengrass.mqttclient.spool.SpoolMessageMetadata;
 import com.aws.greengrass.util.Coerce;
 
 import java.io.IOException;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import javax.inject.Inject;
@@ -41,8 +46,14 @@ public class DiskSpool extends PluginService implements CloudMessageSpool {
     private static final String KV_MESSAGE_ID = "messageId";
     private final DiskSpoolDAO dao;
 
-    private final Long diskSpillThresholdBytes;
-    private Long inMemorySpoolSize = 0L;
+    private final long diskSpillThresholdBytes;
+    /**
+     * Guards {@link #inMemorySpooler} together with {@link #inMemorySpoolSize}. Nucleus calls {@link #add} under its
+     * own lock, but calls {@link #removeMessageById} from MQTT ack callback threads, several at once and sometimes
+     * twice for the same id, so the map and the byte count must change together.
+     */
+    private final Object inMemoryLock = new Object();
+    private long inMemorySpoolSize;
     private final InMemorySpool inMemorySpooler = new InMemorySpool();
 
     /**
@@ -92,13 +103,17 @@ public class DiskSpool extends PluginService implements CloudMessageSpool {
      */
     @Override
     public void removeMessageById(long id) {
-        try {
+        synchronized (inMemoryLock) {
             SpoolMessage message = inMemorySpooler.getMessageById(id);
             if (message != null) {
                 inMemorySpooler.removeMessageById(id);
-                inMemorySpoolSize = Math.max(0, inMemorySpoolSize - message.getRequest().getPayload().length);
+                inMemorySpoolSize -= message.getRequest().getPayload().length;
+                logger.atTrace().kv(KV_MESSAGE_ID, id).log("Removed message from memory");
+                // ids are unique: a message kept in memory was never written to disk
+                return;
             }
-
+        }
+        try {
             dao.removeSpoolMessageById(id);
             logger.atTrace().kv(KV_MESSAGE_ID, id).log("Removed message from Disk Spooler");
         } catch (SQLException e) {
@@ -116,30 +131,66 @@ public class DiskSpool extends PluginService implements CloudMessageSpool {
      */
     @Override
     public void add(long id, SpoolMessage message) throws IOException {
-        if (inMemorySpoolSize < diskSpillThresholdBytes) {
-            // this is meant to happen most of the time: while number of in-flight message is low, they're only
-            // kept in memory
-            inMemorySpooler.add(id, message);
-            inMemorySpoolSize += message.getRequest().getPayload().length;
-        } else {
-            // when memory is full: spill over to disk
-            try {
-                dao.insertSpoolMessage(message);
-                logger.atTrace().kv(KV_MESSAGE_ID, id).log("Added message to Disk Spooler");
-            } catch (SQLException e) {
-                throw new IOException(e);
+        synchronized (inMemoryLock) {
+            if (inMemorySpoolSize < diskSpillThresholdBytes) {
+                // this is meant to happen most of the time: while number of in-flight message is low, they're only
+                // kept in memory
+                inMemorySpooler.add(id, message);
+                inMemorySpoolSize += message.getRequest().getPayload().length;
+                return;
             }
+        }
+        // when memory is full: spill over to disk
+        try {
+            dao.insertSpoolMessage(message);
+            logger.atTrace().kv(KV_MESSAGE_ID, id).log("Added message to Disk Spooler");
+        } catch (SQLException e) {
+            throw new IOException(e);
         }
     }
 
+    /**
+     * Payload bytes currently held in memory.
+     */
+    long getInMemorySpoolSize() {
+        synchronized (inMemoryLock) {
+            return inMemorySpoolSize;
+        }
+    }
+
+    /**
+     * Ids of all spooled messages, in memory and on disk, ordered by id ascending.
+     */
     @Override
     public Iterable<Long> getAllMessageIds() throws IOException {
         try {
             Iterable<Long> fromDao = dao.getAllSpoolMessageIds();
-            return () -> Stream.concat(
+            return Stream.concat(
                     inMemorySpooler.getAllMessageIds().stream(),
                     StreamSupport.stream(fromDao.spliterator(), false)
-            ).iterator();
+            ).sorted().collect(Collectors.toList());
+        } catch (SQLException e) {
+            throw new IOException(e);
+        }
+    }
+
+    /**
+     * Id, payload size and QoS of all spooled messages, in memory and on disk, ordered by id ascending.
+     * Called by Nucleus >= 2.19 at startup instead of reading every message with {@link #getMessageById(long)}.
+     */
+    @Override
+    public List<SpoolMessageMetadata> getAllMessageMetadata() throws IOException {
+        try {
+            List<SpoolMessageMetadata> metadata = new ArrayList<>(dao.getAllSpoolMessageMetadata());
+            for (Long id : inMemorySpooler.getAllMessageIds()) {
+                SpoolMessage message = inMemorySpooler.getMessageById(id);
+                if (message != null) {
+                    metadata.add(new SpoolMessageMetadata(id, message.getRequest().getPayload().length,
+                            message.getRequest().getQos()));
+                }
+            }
+            metadata.sort(Comparator.comparingLong(SpoolMessageMetadata::getId));
+            return metadata;
         } catch (SQLException e) {
             throw new IOException(e);
         }

@@ -6,6 +6,7 @@
 package com.aws.greengrass.disk.spool;
 
 import com.aws.greengrass.mqttclient.spool.SpoolMessage;
+import com.aws.greengrass.mqttclient.spool.SpoolMessageMetadata;
 import com.aws.greengrass.mqttclient.v5.Publish;
 import com.aws.greengrass.mqttclient.v5.QOS;
 import com.aws.greengrass.testcommons.testutilities.GGExtension;
@@ -19,12 +20,18 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
 import java.sql.SQLTransientException;
+import java.sql.Statement;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -62,6 +69,11 @@ class DiskSpoolDAOTest {
 
     private static final CrashableFunction<DiskSpoolDAO, Void, Exception> OPERATION_GET_ALL_SPOOL_MESSAGE_IDS = dao -> {
         dao.getAllSpoolMessageIds();
+        return null;
+    };
+
+    private static final CrashableFunction<DiskSpoolDAO, Void, Exception> OPERATION_GET_ALL_SPOOL_MESSAGE_METADATA = dao -> {
+        dao.getAllSpoolMessageMetadata();
         return null;
     };
 
@@ -164,6 +176,81 @@ class DiskSpoolDAOTest {
         }
     }
 
+    @Test
+    void GIVEN_empty_spooler_WHEN_get_all_message_metadata_THEN_returns_empty_list() throws SQLException {
+        assertTrue(dao.getAllSpoolMessageMetadata().isEmpty());
+    }
+
+    @Test
+    void GIVEN_messages_inserted_in_random_order_WHEN_get_all_message_metadata_THEN_returns_ordered_metadata()
+            throws SQLException {
+        insertMessage(50L, "hello world".getBytes(StandardCharsets.UTF_8), QOS.AT_LEAST_ONCE);
+        insertMessage(10L, "hello".getBytes(StandardCharsets.UTF_8), QOS.AT_MOST_ONCE);
+        insertMessage(30L, "abc".getBytes(StandardCharsets.UTF_8), QOS.EXACTLY_ONCE);
+
+        List<SpoolMessageMetadata> result = dao.getAllSpoolMessageMetadata();
+
+        assertEquals(Arrays.asList(
+                new SpoolMessageMetadata(10L, 5L, QOS.AT_MOST_ONCE),
+                new SpoolMessageMetadata(30L, 3L, QOS.EXACTLY_ONCE),
+                new SpoolMessageMetadata(50L, 11L, QOS.AT_LEAST_ONCE)), result);
+    }
+
+    @Test
+    void GIVEN_message_with_null_payload_WHEN_get_all_message_metadata_THEN_returns_zero_size() throws SQLException {
+        insertMessage(1L, null, QOS.AT_LEAST_ONCE);
+
+        assertEquals(Collections.singletonList(new SpoolMessageMetadata(1L, 0L, QOS.AT_LEAST_ONCE)),
+                dao.getAllSpoolMessageMetadata());
+    }
+
+    @Test
+    void GIVEN_messages_WHEN_one_removed_THEN_metadata_reflects_current_state() throws SQLException {
+        byte[] payload = "test".getBytes(StandardCharsets.UTF_8);
+        for (long id : new long[]{1L, 2L, 3L}) {
+            insertMessage(id, payload, QOS.AT_LEAST_ONCE);
+        }
+
+        dao.removeSpoolMessageById(2L);
+
+        List<SpoolMessageMetadata> result = dao.getAllSpoolMessageMetadata();
+        assertEquals(2, result.size());
+        assertEquals(1L, result.get(0).getId());
+        assertEquals(3L, result.get(1).getId());
+    }
+
+    @Test
+    void GIVEN_message_with_unknown_qos_WHEN_get_all_message_metadata_THEN_qos_is_null(ExtensionContext context)
+            throws SQLException {
+        ignoreExceptionOfType(context, IllegalArgumentException.class);
+        insertMessage(1L, "test".getBytes(StandardCharsets.UTF_8), QOS.AT_LEAST_ONCE);
+        setPersistedQos(1L, 7);
+
+        assertEquals(Collections.singletonList(new SpoolMessageMetadata(1L, 4L, null)),
+                dao.getAllSpoolMessageMetadata());
+    }
+
+    @Test
+    void GIVEN_message_with_unknown_qos_WHEN_get_message_by_id_THEN_sql_exception_thrown(ExtensionContext context)
+            throws SQLException {
+        ignoreExceptionOfType(context, IllegalArgumentException.class);
+        insertMessage(1L, "test".getBytes(StandardCharsets.UTF_8), QOS.AT_LEAST_ONCE);
+        setPersistedQos(1L, 7);
+
+        assertThrows(SQLException.class, () -> dao.getSpoolMessageById(1L));
+    }
+
+    private void setPersistedQos(long id, int qos) throws SQLException {
+        try (Statement statement = dao.getConnection().createStatement()) {
+            statement.executeUpdate("UPDATE spooler SET qos = " + qos + " WHERE message_id = " + id + ";");
+        }
+    }
+
+    private void insertMessage(long id, byte[] payload, QOS qos) throws SQLException {
+        dao.insertSpoolMessage(SpoolMessage.builder().id(id)
+                .request(Publish.builder().topic("t").payload(payload).qos(qos).build()).build());
+    }
+
     @ParameterizedTest
     @MethodSource("allSpoolerOperations")
     void GIVEN_spooler_WHEN_corruption_detected_during_operation_THEN_spooler_recovers(CrashableFunction<DiskSpoolDAO, Void, SQLException> operation) throws SQLException {
@@ -171,6 +258,24 @@ class DiskSpoolDAOTest {
         dao.getConnection().addExceptionOnUpdate(corruptionException);
         assertThrows(SQLException.class, () -> operation.apply(dao));
         operation.apply(dao);
+    }
+
+    @ParameterizedTest
+    @MethodSource("allReadOperations")
+    void GIVEN_spooler_WHEN_corruption_detected_while_reading_results_THEN_spooler_recovers(
+            CrashableFunction<DiskSpoolDAO, Void, SQLException> operation) throws SQLException {
+        insertMessage(1L, "Hello".getBytes(StandardCharsets.UTF_8), QOS.AT_LEAST_ONCE);
+        // the query executes, then reading its results reaches a damaged page
+        SQLException corruptionException = new SQLException("DB is corrupt", "some state", 11);
+        dao.getConnection().addExceptionOnNext(corruptionException);
+
+        SQLException thrown = assertThrows(SQLException.class, () -> operation.apply(dao));
+        assertEquals(corruptionException, thrown);
+        // recovered: the database was recreated, so the message is gone, and it can be used again
+        assertEquals(Collections.emptyList(), dao.getAllSpoolMessageIds());
+        assertTrue(dao.getAllSpoolMessageMetadata().isEmpty());
+        insertMessage(2L, "Hello".getBytes(StandardCharsets.UTF_8), QOS.AT_LEAST_ONCE);
+        assertNotNull(dao.getSpoolMessageById(2L));
     }
 
     @ParameterizedTest
@@ -183,10 +288,75 @@ class DiskSpoolDAOTest {
         assertThrows(SQLException.class, () -> operation.apply(dao));
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"garbage", "truncated", "damaged-header"})
+    void GIVEN_corrupted_database_file_WHEN_initialize_THEN_new_database_created(String corruption)
+            throws SQLException, IOException {
+        Path database = currDir.resolve("corrupted.db");
+        DiskSpoolDAO previousRun = new DiskSpoolDAO(database);
+        previousRun.initialize();
+        try {
+            for (long id = 0; id < 200L; id++) {
+                previousRun.insertSpoolMessage(SpoolMessage.builder().id(id)
+                        .request(Publish.builder().topic("t").payload(new byte[500]).qos(QOS.AT_LEAST_ONCE).build())
+                        .build());
+            }
+        } finally {
+            previousRun.close();
+        }
+        corrupt(database, corruption);
+
+        DiskSpoolDAO restarted = new DiskSpoolDAO(database);
+        try {
+            // corruption is found while statements are prepared, before any statement executes
+            restarted.initialize();
+
+            assertTrue(restarted.getAllSpoolMessageMetadata().isEmpty());
+            restarted.insertSpoolMessage(SpoolMessage.builder().id(1L)
+                    .request(Publish.builder().topic("t").payload(new byte[5]).qos(QOS.AT_LEAST_ONCE).build())
+                    .build());
+            assertNotNull(restarted.getSpoolMessageById(1L));
+        } finally {
+            restarted.close();
+        }
+    }
+
+    private static void corrupt(Path database, String corruption) throws IOException {
+        byte[] content = Files.readAllBytes(database);
+        switch (corruption) {
+            case "garbage":
+                byte[] garbage = new byte[4096];
+                Arrays.fill(garbage, (byte) 'x');
+                Files.write(database, garbage);
+                break;
+            case "truncated":
+                Files.write(database, Arrays.copyOf(content, content.length / 2));
+                break;
+            case "damaged-header":
+                content[0] = 'X';
+                Files.write(database, content);
+                break;
+            default:
+                throw new IllegalArgumentException(corruption);
+        }
+    }
+
+    public static Stream<Arguments> allReadOperations() {
+        return Stream.of(
+                Arguments.of(OPERATION_GET_ALL_SPOOL_MESSAGE_IDS),
+                Arguments.of(OPERATION_GET_ALL_SPOOL_MESSAGE_METADATA),
+                Arguments.of((CrashableFunction<DiskSpoolDAO, Void, Exception>) dao -> {
+                    dao.getSpoolMessageById(1L);
+                    return null;
+                })
+        );
+    }
+
     public static Stream<Arguments> allSpoolerOperations() {
         return Stream.of(
                 Arguments.of(OPERATION_INSERT_SPOOL_MESSAGE),
                 Arguments.of(OPERATION_GET_ALL_SPOOL_MESSAGE_IDS),
+                Arguments.of(OPERATION_GET_ALL_SPOOL_MESSAGE_METADATA),
                 Arguments.of(OPERATION_GET_SPOOL_MESSAGE_BY_ID),
                 Arguments.of(OPERATION_REMOVE_SPOOL_MESSAGE_BY_ID)
         );

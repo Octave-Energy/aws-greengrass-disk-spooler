@@ -9,6 +9,7 @@ package com.aws.greengrass.disk.spool;
 import com.aws.greengrass.config.Configuration;
 import com.aws.greengrass.dependency.Context;
 import com.aws.greengrass.mqttclient.spool.SpoolMessage;
+import com.aws.greengrass.mqttclient.spool.SpoolMessageMetadata;
 import com.aws.greengrass.mqttclient.v5.Publish;
 import com.aws.greengrass.mqttclient.v5.QOS;
 import org.junit.jupiter.api.Test;
@@ -18,8 +19,14 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 public class DiskSpoolTest {
@@ -159,6 +166,56 @@ public class DiskSpoolTest {
             }
         }
 
+    }
+
+    @Test
+    void GIVEN_messages_in_memory_and_on_disk_WHEN_listing_ids_and_metadata_THEN_both_are_merged_in_id_order()
+            throws SQLException, IOException {
+        try (Context context = new Context()) {
+            Configuration config = new Configuration(context);
+            config.mergeMap(1000, Collections.singletonMap("configuration",
+                    // two 5-byte messages fit in memory, the next one spills to disk
+                    Collections.singletonMap("diskSpillThresholdBytes", 10)));
+            DiskSpoolDAOFake daoFake = new DiskSpoolDAOFake(currDir.resolve("spooler.db"));
+            daoFake.initialize();
+            // close the database at the end: Windows cannot delete the temporary directory of an open database
+            try {
+                DiskSpool spool = new DiskSpool(config.getRoot(), daoFake);
+
+                spool.add(1L, message(1L, QOS.AT_LEAST_ONCE)); // memory
+                spool.add(2L, message(2L, QOS.AT_MOST_ONCE));  // memory
+                spool.add(3L, message(3L, QOS.AT_LEAST_ONCE)); // disk
+                spool.removeMessageById(1L);                     // frees memory
+                spool.add(4L, message(4L, QOS.AT_LEAST_ONCE)); // memory again
+
+                assertNull(daoFake.getSpoolMessageById(2L));
+                assertNotNull(daoFake.getSpoolMessageById(3L));
+                assertNull(daoFake.getSpoolMessageById(4L));
+
+                List<Long> ids = new ArrayList<>();
+                spool.getAllMessageIds().forEach(ids::add);
+                assertEquals(Arrays.asList(2L, 3L, 4L), ids);
+
+                assertEquals(Arrays.asList(
+                        new SpoolMessageMetadata(2L, 5L, QOS.AT_MOST_ONCE),
+                        new SpoolMessageMetadata(3L, 5L, QOS.AT_LEAST_ONCE),
+                        new SpoolMessageMetadata(4L, 5L, QOS.AT_LEAST_ONCE)
+                ), spool.getAllMessageMetadata());
+            } finally {
+                daoFake.close();
+            }
+        }
+    }
+
+    private static SpoolMessage message(long id, QOS qos) {
+        return SpoolMessage.builder()
+                .id(id)
+                .request(Publish.builder()
+                        .topic("spool")
+                        .payload("Hello".getBytes(StandardCharsets.UTF_8))
+                        .qos(qos)
+                        .build())
+                .build();
     }
 
 }
