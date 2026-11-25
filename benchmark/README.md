@@ -1,0 +1,132 @@
+# Disk spooler benchmark
+
+A black-box benchmark of the disk spooler plugin, run inside a real AWS IoT Greengrass Nucleus the way IBEMS uses it
+in the field. It establishes a baseline and compares builds (branches, tags, commits) so that you can see what a
+change improves and what it breaks.
+
+```
+ IBEMS simulator ──IPC──▶ Nucleus 2.18.3 + disk spooler ──MQTT/mTLS──▶ network proxy ──▶ Mosquitto ──▶ cloud subscriber
+ (Greengrass component,   (released distribution,                       (up / black hole /            (decodes every
+  protobuf batches,        plugin from the component                     reset: "the internet          message, checks
+  publish_to_iot_core)     store, production config)                     breaks")                       sequence numbers)
+```
+
+Nothing in the plugin or the Nucleus is mocked or instrumented. Everything is measured from the outside:
+
+| what | how |
+|---|---|
+| ingest rate, IPC publish latency, rejected publishes | the simulator, through `publish_to_iot_core_async` (QoS 1), as IBEMS publishes |
+| delivered, lost, duplicated, out-of-order messages, end-to-end latency | the cloud subscriber; every message carries a sequence number and its creation time |
+| disk used | size of `spooler.db` (+ `-journal`/`-wal`), every second |
+| bytes written to storage | `/proc/<pid>/io` of the Nucleus (Linux only) |
+| RAM used | RSS of the Nucleus; JVM heap (`jstat`), every second; at checkpoints the live heap after a full GC and the number of `SpoolMessage` objects in it (`jcmd GC.class_histogram`) |
+| CPU | CPU time of the Nucleus |
+| errors | WARN/ERROR events and known spooler events in the Nucleus logs, e.g. *Disk Spooler failed to add Message* (fallback to memory) or *Message spool is full* |
+
+## Messages
+
+The simulator publishes IBEMS `MeasurementMessage` batches (protobuf, schema copied from `octave-ibems`, see
+`proto/SOURCE.md`) on `ibems/<thing>/measurements/protobuf`. They come from a pool generated from a fixed seed, so
+every run publishes the same bytes. The mix is about the one of IBEMS: 85% small low-latency batches (a few devices,
+a few values), 13% larger batches, 2% BMS cell dumps (string → module → cell) of up to 125 KB, the IBEMS cap. Mean
+size is about 2 KB.
+
+Like IBEMS, the simulator waits for every publish to complete before it sends the next one (`max_outstanding: 1`).
+If the Nucleus cannot accept messages at the target rate, the shortfall is reported (`ingest_shortfall_pct`).
+
+## Scenarios
+
+A scenario is a publish rate and a `diskSpillThresholdBytes` value, run through these phases:
+
+1. **startup**: the Nucleus starts and sets up the persistent spooler (the run fails if it falls back to memory)
+2. **connect**, **warmup**: until messages reach the cloud, then a few seconds of steady state
+3. **online**: steady state, link up
+4. **outage**: the link is black-holed (packets vanish, as on a dead uplink: the Nucleus only notices through its MQTT
+   keep-alive) or reset; the simulator keeps publishing and the spooler takes over: first memory, up to
+   `diskSpillThresholdBytes`, then disk
+5. **power loss** (optional): the Nucleus and its components are SIGKILLed during the outage and restarted while the
+   link is still down; whatever was only in memory is lost (note: a process kill, the operating system keeps its
+   page cache, so this does not test fsync durability)
+6. **recovery**: the link is back; the simulator keeps publishing; until the backlog of the outage is delivered
+7. **cooldown**: the simulator stops; until every accepted message is delivered, or nothing more arrives
+   (then the rest is lost); then a graceful stop and the final database size
+
+Profiles in `scenarios/`:
+
+- `quick.yaml` (every pull request): 10, 100 and 1000 msg/s × spill threshold 0 (disk only, no RAM) and 300 KiB
+  (production), 15 s online, 30 s outage, plus two power-loss scenarios.
+- `full.yaml` (on demand): same matrix, 60 s online, 180 s outage (longer than the MQTT keep-alive, so the Nucleus
+  drops the connection and reconnects; at 1000 msg/s the 60 MiB spool fills up), more power-loss scenarios, a reset.
+
+The Nucleus and spooler settings are those of production (`octave-ibems/deployment/generate_greengrass_deployment.py`):
+Nucleus 2.18.3, `mqtt.spooler.storageType: Disk`, `maxSizeInBytes: 62914560`, JSON logs at INFO.
+
+## The report
+
+`report.md` (also the job summary in GitHub Actions), `report.json` and `charts/*.png`:
+
+- **Key results**: one row per scenario and build. These answer the questions:
+  - *Can we ingest at 10 / 100 / 1000 msg/s?* `accepted msg/s`, `IPC p99`; and get it to the cloud? `delivered msg/s`,
+    `e2e p50`, `capacity msg/s`
+  - *How much disk space without RAM?* the `spill0` scenarios: `db growth` during the outage, `disk B / payload B`,
+    `db after drain` (SQLite does not give space back)
+  - *If RAM is used, how much?* `heap for backlog` (live heap at the end of the outage minus online, both after a full
+    GC), `RSS peak`; in detail the number of `SpoolMessage` objects in the heap per checkpoint
+  - *Do we lose messages?* `lost`, `dup`, `rejected`
+- **Comparison** (two builds): every headline metric with its direction and a noise tolerance; changes within the
+  tolerance are shown as ≈.
+- **Scenarios**: charts (throughput, backlog, database size, heap, RSS; the builds overlaid, aligned on the start of
+  the outage), and per build the phases, memory checkpoints and most frequent log events.
+
+## Running it
+
+### In GitHub Actions
+
+- Every pull request that touches the plugin runs the quick profile: PR head (candidate) against its base (baseline).
+- *Actions → Spooler benchmark → Run workflow* benchmarks any two refs, e.g. baseline `main-octave` and candidate
+  `sync-upstream-and-fix-spool-races`, with the quick or full profile. Leave the candidate empty to record a baseline.
+
+Every scenario runs in its own job, both builds on the same runner one after the other (alternating which goes
+first), so their comparison does not depend on the runner. Download the `spooler-benchmark-report` artifact for the
+charts, `results-<scenario>` for the raw time series and all logs.
+
+To compare against an earlier run, download both `report.json` files:
+
+```bash
+python -m spoolbench compare baseline/report.json candidate/report.json
+```
+
+Reports from different machines are flagged: compare runs of the same workflow (same runner type) only.
+
+### Locally
+
+Requires Python 3.11+, a JDK 11+ to run the Nucleus (`JAVA_HOME`), Docker (or a local `mosquitto`) and `openssl`.
+
+```bash
+cd benchmark
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+(cd .. && mvn -B package -DskipTests -Dmaven.test.skip=true)   # JDK 8, as in CI
+.venv/bin/python -m spoolbench run --profile scenarios/quick.yaml \
+    --jar main=../target/aws.greengrass.DiskSpooler.jar --out results/local
+```
+
+- `--jar LABEL=PATH` can be repeated to compare builds in one run; `--ref LABEL=TEXT` describes a build in the report.
+- `--only REGEX` selects scenarios (`python -m spoolbench list --profile …` lists them), `--repeat N` repeats them.
+- `python -m spoolbench report results/local` rebuilds the report from the results.
+- The Nucleus distribution is downloaded once to `~/.cache/spoolbench`.
+
+## Layout
+
+| file | |
+|---|---|
+| `spoolbench/runner.py` | the scenario phases and the metrics |
+| `spoolbench/nucleus.py` | installs and runs the Nucleus with the plugin and the simulator component |
+| `spoolbench/simulator.py` | the IBEMS simulator component |
+| `spoolbench/payloads.py` | the protobuf message generator |
+| `spoolbench/cloud.py` | the cloud subscriber and loss accounting |
+| `spoolbench/netproxy.py` | the network proxy |
+| `spoolbench/broker.py`, `certs.py` | Mosquitto and its test PKI |
+| `spoolbench/probe.py` | process, JVM and database metrics |
+| `spoolbench/report.py`, `compare.py` | report, charts and comparison (metrics, directions, tolerances) |
+| `scenarios/*.yaml` | the profiles |
+| `proto/` | the IBEMS measurement schema |

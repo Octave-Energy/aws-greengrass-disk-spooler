@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package ibems_measurement.v1;
+
+import "ibems_measurement/v1/device_measurements.proto";
+
+// Top-level message sent over MQTT: a batch of measurements
+message MeasurementBatch {
+    // Start timestamp of the batch, in milliseconds since epoch (UTC).
+    // all measurements in this batch have a timestamp expressed as a positive offset from this base time.
+    int64 timestamp_ms = 1;
+
+    repeated ibems_measurement.v1.DeviceMeasurements measurements = 2;
+}

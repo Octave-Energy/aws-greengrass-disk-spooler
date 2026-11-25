@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package ibems_measurement.v1;
+
+// WARNING:
+// never update nor re-use the numeric values of existing enum entries since that would break
+// deserialization in the ingestion lambda (and real time partner API when applicable).
+// Enum number don't need to be sequential.
+
+// Device identifiers used by IBEMS instances when emitting measurements.
+enum DeviceType {
+  UNKNOWN = 0;
+
+  // BMS
+  BMS = 2;
+  MBE_LTC6820 = 3;
+  NXP_FRDM33664 = 4;
+  IVTS = 5;
+  DIO = 34;
+
+  // site metering
+  SITE_POWER_METER = 6;
+  FUTECH_MQTT_METER = 7;
+
+  // BESS
+  INVERTER = 8;
+  INVERTER_BANK = 9;
+  BMS_BANK_FOR_EMS = 10;
+  KEHUA = 11;
+  ENJOY = 12;
+  // NOTE: intentionally no underscore for backwards compatibility with pre-protobuf measurements
+  CONCURRENTLOCALEMSCONTROLLER = 13;
+  INVERTER_AC_POWER_METER = 14;
+  YUSO_EMS = 15;
+  SOC_CALIBRATION_CONTROLLER = 16;
+  SUNSPEC_BESS_CTRL_MODEL = 17;
+  CACHED_INVERTER_CLIENT = 18;
+  SINEXCEL = 19;
+  // NOTE: intentionally no underscore for backwards compatibility with pre-protobuf measurements
+  EMSCONTROLLER = 36;
+  EMS = 44;
+
+  // PV
+  PV_EMS = 20;
+  PV_METER = 21;
+  PV_CLIENT = 22;
+  YUSO_PV_EMS = 23;
+  SUNSPEC_PV_CTRL_MODEL = 35;
+  // NOTE: intentionally no underscore for backwards compatibility with pre-protobuf measurements
+  PVEMSCONTROLLER = 39;
+  PV_ARRAY = 40;
+  PV_CLIENT_CONTROLLED = 41;
+  PV_CLIENT_REFERENCE = 42;
+
+  // EV
+  EV_EMS = 24;
+  EV_EMS_CONTROLLER = 25;
+  EV_LOAD_BALANCER = 26;
+  EV_METER = 27;
+
+  // Wind
+  WIND_METER = 43;
+
+  // Cooling devices
+  AIRCO = 28;
+
+  // PLC
+  PLC = 29;
+
+  // IBEMS itself
+  IBEMS = 31;
+  REVPI = 32;
+  YUSO_CLIENT = 33;
+
+  // Irradiation sensor
+  IRRADIATION_SENSOR = 37;
+
+  // Transformer sensor
+  TRANSFORMER_SENSOR = 38;
+
+  // revpi extension
+  REVPI_EXTENSION = 45;
+}
