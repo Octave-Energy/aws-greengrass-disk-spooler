@@ -34,6 +34,8 @@ DOWNLOAD_URL = "https://d2s8p88vqu9w66.cloudfront.net/releases/greengrass-{versi
 
 PERSISTENT_SPOOLER_READY = "Persistent Spooler has been set up"
 FELL_BACK_TO_MEMORY = "defaulting to InMemory Spooler"
+# logged as an ERROR on every reconnect attempt while the link is down
+MQTT_CONNECT_FAILED = "Failed to connect to AWS IoT Core"
 
 
 def install_distribution(version: str, cache_dir: Path) -> Path:
@@ -196,7 +198,7 @@ class Nucleus:
                 raise RuntimeError("Nucleus fell back to the in-memory spooler: the disk spooler plugin did not load")
             if PERSISTENT_SPOOLER_READY in text:
                 return
-            time.sleep(0.5)
+            time.sleep(0.1)  # the startup time is a metric: poll often enough to measure it
         raise TimeoutError(f"persistent spooler not set up after {timeout_s}s, see {self.greengrass_log}")
 
     def log_size(self) -> int:
@@ -248,9 +250,11 @@ class Nucleus:
             shutil.copytree(logs, self.log_dir / "greengrass-logs", dirs_exist_ok=True)
 
     def log_summary(self, top: int = 15) -> Dict[str, Any]:
-        """Counts WARN/ERROR log events, grouped by logger and message (JSON or text log format)."""
+        """Counts WARN/ERROR log events, grouped by logger and message (JSON or text log format), and separately the
+        ERROR events of failed MQTT connect attempts."""
         counts: Dict[str, int] = {}
         totals = {"WARN": 0, "ERROR": 0}
+        mqtt_connect_errors = 0
         logs = sorted((self.root / "logs").glob("*.log")) if (self.root / "logs").exists() else []
         for log in logs:
             for line in log.read_text(errors="replace").splitlines():
@@ -269,6 +273,9 @@ class Nucleus:
                             level, key = lvl, f"{log.stem}: {line.split(']', 2)[-1][:160]}"
                 if level in totals:
                     totals[level] += 1
+                    if level == "ERROR" and MQTT_CONNECT_FAILED in line:
+                        mqtt_connect_errors += 1
                     counts[f"[{level}] {key.strip()}"] = counts.get(f"[{level}] {key.strip()}", 0) + 1
         ordered = sorted(counts.items(), key=lambda kv: -kv[1])[:top]
-        return {"warn": totals["WARN"], "error": totals["ERROR"], "top": [{"count": c, "event": e} for e, c in ordered]}
+        return {"warn": totals["WARN"], "error": totals["ERROR"], "error_mqtt_connect": mqtt_connect_errors,
+                "top": [{"count": c, "event": e} for e, c in ordered]}

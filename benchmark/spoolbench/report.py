@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from . import projection
-from .compare import METRICS_BY_KEY, fmt, render, scenario_sort_key
+from .compare import METRICS_BY_KEY, MIN_CAPACITY_BACKLOG_MSGS, fmt, render, scenario_sort_key
 
 SCHEMA = "spoolbench-report/1"
 # reference categorical palette (validated for colour vision deficiencies), assigned in fixed order to the builds
@@ -36,8 +36,9 @@ KEY_COLUMNS = [
     ("heap_backlog_bytes", "heap for backlog"),
     ("rss_peak_bytes", "RSS peak"),
     ("recovery_backlog_msgs", "backlog at link up"),
-    ("recovery_drain_s", "drain"),
-    ("recovery_drain_rate_msg_s", "drain msg/s"),
+    ("recovery_first_delivery_s", "reconnect"),
+    ("recovery_drain_after_first_delivery_s", "drain"),
+    ("recovery_drain_rate_after_first_delivery_msg_s", "drain msg/s"),
     ("cooldown_delivery_rate_msg_s", "capacity msg/s"),
     ("lost_msgs", "lost"),
     ("duplicate_msgs", "dup"),
@@ -280,12 +281,16 @@ KEY_COLUMN_GROUPS = [
     ]),
     ("Recovery (link back up)", [
         ("backlog at link up", "messages waiting in the spooler when the internet came back"),
-        ("drain", "time to deliver that backlog while IBEMS keeps publishing"),
+        ("reconnect", "from the link coming back to the first delivery. The Nucleus MQTT client retries with growing "
+                      "pauses, so this depends on when the link came back relative to the next attempt, not on the "
+                      "spooler. It is shown but not compared, and *drain* starts after it"),
+        ("drain", "time to deliver that backlog while IBEMS keeps publishing, from the first delivery"),
         ("drain msg/s", "backlog / drain time. Messages are delivered in order, so this is close to the delivery "
                         "capacity. After an outage shorter than the MQTT keep-alive the Nucleus has not noticed it "
                         "and part of the backlog arrives at once from the stalled connection, so small backlogs drain "
                         "faster"),
-        ("capacity msg/s", "delivery rate while working through a backlog with no new messages"),
+        ("capacity msg/s", "delivery rate while working through a backlog with no new messages (only measured on a "
+                           f"backlog of at least {MIN_CAPACITY_BACKLOG_MSGS:,} messages)"),
     ]),
     ("Integrity", [
         ("lost", "accepted by the Nucleus but never delivered"),
